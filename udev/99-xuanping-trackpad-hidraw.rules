@@ -1,0 +1,3 @@
+# Allow the seated user to read Magic Trackpad HID battery report 0x90.
+# Kernel power_supply often stays at 0% after a Bluetooth reconnect.
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", MODE="0660", GROUP="input", TAG+="uaccess"
