@@ -35,19 +35,20 @@ function isPeripheral(device) {
   var model = modelText(device).toLowerCase()
   var path = device.nativePath ? String(device.nativePath).toLowerCase() : ""
   if (typeName.indexOf("Touchpad") >= 0) return true
-  if (model.indexOf("trackpad") >= 0 || model.indexOf("touchpad") >= 0) return true
-  if (path.indexOf("magic-trackpad") >= 0 || path.indexOf("trackpad") >= 0) return true
-  if (typeName.indexOf("Mouse") >= 0 || typeName.indexOf("Keyboard") >= 0) return true
+  if (model.indexOf("magic-trackpad") >= 0 || model.indexOf("trackpad") >= 0 || model.indexOf("touchpad") >= 0) return true
+  if (path.indexOf("magic-trackpad") >= 0 || path.indexOf("trackpad") >= 0 || path.indexOf("touchpad") >= 0) return true
   return false
 }
 
 function rank(device) {
   var typeName = device && device.type !== undefined ? String(device.type) : ""
   var model = modelText(device).toLowerCase()
-  if (typeName.indexOf("Touchpad") >= 0 || model.indexOf("trackpad") >= 0 || model.indexOf("touchpad") >= 0) return 0
-  if (typeName.indexOf("Mouse") >= 0) return 1
-  if (typeName.indexOf("Keyboard") >= 0) return 2
-  return 3
+  var path = device && device.nativePath ? String(device.nativePath).toLowerCase() : ""
+  var blob = model + " " + path
+  if (blob.indexOf("magic-trackpad") >= 0 || blob.indexOf("magic trackpad") >= 0) return 0
+  if (typeName.indexOf("Touchpad") >= 0 || model.indexOf("trackpad") >= 0 || model.indexOf("touchpad") >= 0) return 1
+  if (path.indexOf("trackpad") >= 0 || path.indexOf("touchpad") >= 0) return 1
+  return 2
 }
 
 function peripherals(devices) {
@@ -97,9 +98,7 @@ function stateLabel(device, states) {
 
 function displayName(device) {
   var model = modelText(device)
-  if (!model) return "Trackpad"
-  if (model.toLowerCase().indexOf("trackpad") >= 0 || model.toLowerCase().indexOf("touchpad") >= 0) return model
-  return model + " Trackpad"
+  return model || "Trackpad"
 }
 
 function icon() {

@@ -114,6 +114,63 @@ def read_uevent(path):
         return None
     return data
 
+# Kernel HID_ID is bus:vendor:product as %04X:%08X:%08X.
+# USB Apple 05ac / BT Apple 004c; trackpad PIDs 0265, 0324 (USB-C), 030e (1st gen).
+APPLE_TRACKPAD_VP = frozenset({
+    (0x05AC, 0x0265), (0x05AC, 0x0324), (0x05AC, 0x030E),
+    (0x004C, 0x0265), (0x004C, 0x0324), (0x004C, 0x030E),
+})
+
+def parse_hid_id(hid_id):
+    parts = (hid_id or "").strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(part, 16) for part in parts)
+    except ValueError:
+        return None
+
+def is_apple_trackpad_id(hid_id):
+    parsed = parse_hid_id(hid_id)
+    if not parsed:
+        return False
+    _bus, vendor, product = parsed
+    return (vendor, product) in APPLE_TRACKPAD_VP
+
+def text_has_trackpad(blob):
+    lowered = (blob or "").lower()
+    return "trackpad" in lowered or "touchpad" in lowered
+
+def hid_info_from(path):
+    cur = pathlib.Path(path)
+    seen = set()
+    for _ in range(8):
+        try:
+            cur = cur.resolve()
+        except OSError:
+            return {}
+        key = str(cur)
+        if key in seen:
+            break
+        seen.add(key)
+        data = read_uevent(cur / "uevent") or {}
+        if data.get("HID_ID") or data.get("HID_NAME"):
+            return data
+        nxt = cur / "device"
+        if nxt.exists():
+            cur = nxt
+            continue
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return {}
+
+def is_trackpad_hid(name, hid_id):
+    if is_apple_trackpad_id(hid_id):
+        return True
+    return text_has_trackpad(name)
+
 def sysfs_battery():
     root = pathlib.Path("/sys/class/power_supply")
     best, best_score = None, -1
@@ -127,11 +184,14 @@ def sysfs_battery():
             continue
         model = data.get("POWER_SUPPLY_MODEL_NAME", "")
         name = data.get("POWER_SUPPLY_NAME", "")
-        blob = f"{model} {name}".lower()
-        if "trackpad" in blob or "touchpad" in blob:
+        hid = hid_info_from(path)
+        hid_name = hid.get("HID_NAME", "")
+        hid_id = hid.get("HID_ID", "")
+        blob = f"{model} {name} {hid_name}"
+        if is_apple_trackpad_id(hid_id):
+            score = 3
+        elif text_has_trackpad(blob):
             score = 2
-        elif name.startswith("hid-") or "mouse" in blob:
-            score = 1
         else:
             continue
         try:
@@ -142,7 +202,7 @@ def sysfs_battery():
             "present": data.get("POWER_SUPPLY_PRESENT", "1") == "1",
             "percentage": capacity,
             "status": data.get("POWER_SUPPLY_STATUS", "Unknown"),
-            "model": model or name,
+            "model": model or hid_name or name,
             "path": str(path),
             "source": "sysfs",
             "stale": False,
@@ -160,9 +220,7 @@ def hidraw_devices():
         data = read_uevent(entry / "device" / "uevent") or {}
         name = data.get("HID_NAME", "")
         hid_id = data.get("HID_ID", "")
-        driver = data.get("DRIVER", "")
-        blob = f"{name} {hid_id} {driver}".lower()
-        if driver != "magicmouse" and "trackpad" not in blob and "004c:0265" not in hid_id.lower():
+        if not is_trackpad_hid(name, hid_id):
             continue
         found.append((f"/dev/{entry.name}", name or "Magic Trackpad"))
     return found
@@ -205,52 +263,46 @@ def hidraw_battery():
     return None
 
 sys_rec = sysfs_battery()
-hid_rec = None
 cache = load_cache()
-cache_age = now - float(cache.get("savedAt", 0)) if cache else 1e9
-if not sys_rec or sys_rec.get("percentage", -1) <= 0:
-    if cache and cache_age < 45:
-        hid_rec = {
-            "present": True,
-            "percentage": cache["percentage"],
-            "status": cache.get("status", "Discharging"),
-            "model": (sys_rec or {}).get("model") or cache.get("model", ""),
-            "path": (sys_rec or {}).get("path", ""),
-            "source": "hidraw",
-            "stale": False,
-        }
-    else:
-        hid_rec = hidraw_battery()
+chosen = {
+    "present": False,
+    "percentage": -1,
+    "status": "Disconnected",
+    "model": "",
+    "source": "none",
+    "stale": False,
+}
 
-chosen = None
-if hid_rec:
-    chosen = hid_rec
-elif sys_rec and sys_rec.get("percentage", -1) > 0:
-    chosen = sys_rec
-elif sys_rec and sys_rec.get("present"):
-    cache = load_cache()
-    if cache:
-        chosen = {
-            "present": True,
-            "percentage": cache["percentage"],
-            "status": cache.get("status", "Discharging"),
-            "model": sys_rec.get("model") or cache.get("model", ""),
-            "path": sys_rec.get("path", ""),
-            "source": "cache",
-            "stale": True,
-        }
-    else:
-        chosen = {
-            "present": True,
-            "percentage": -1,
-            "status": "Unknown",
-            "model": sys_rec.get("model", ""),
-            "path": sys_rec.get("path", ""),
-            "source": "sysfs",
-            "stale": False,
-        }
-else:
-    chosen = {"present": False, "percentage": -1, "status": "Disconnected", "model": "", "source": "none", "stale": False}
+if sys_rec:
+    hid_rec = None
+    if sys_rec.get("percentage", -1) <= 0:
+        hid_rec = hidraw_battery()
+    if hid_rec:
+        chosen = hid_rec
+    elif sys_rec.get("percentage", -1) > 0:
+        chosen = sys_rec
+    elif sys_rec.get("present"):
+        cache_age = now - float(cache.get("savedAt", 0)) if cache else 1e9
+        if cache and cache_age < 45:
+            chosen = {
+                "present": True,
+                "percentage": cache["percentage"],
+                "status": cache.get("status", "Discharging"),
+                "model": sys_rec.get("model") or cache.get("model", ""),
+                "path": sys_rec.get("path", ""),
+                "source": "cache",
+                "stale": True,
+            }
+        else:
+            chosen = {
+                "present": True,
+                "percentage": -1,
+                "status": sys_rec.get("status", "Unknown"),
+                "model": sys_rec.get("model", ""),
+                "path": sys_rec.get("path", ""),
+                "source": "sysfs",
+                "stale": False,
+            }
 
 if chosen.get("present") and chosen.get("percentage", -1) > 0 and not chosen.get("stale"):
     save_cache(chosen)
@@ -262,22 +314,64 @@ install_hidraw() {
   local rule_src dest user
   rule_src="$(cd "$(dirname "$0")/.." && pwd)/udev/99-xuanping-trackpad-hidraw.rules"
   dest=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
-  user="${USER:-$(id -un)}"
+  user="$(id -un)"
   [[ -f $rule_src ]] || { echo "missing udev rule: $rule_src" >&2; return 1; }
   pkexec /usr/bin/install -m 644 "$rule_src" "$dest"
   pkexec /usr/bin/udevadm control --reload-rules
   pkexec /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
-  if ! id -nG "$user" | grep -qw input; then
-    pkexec /usr/sbin/usermod -aG input "$user" || pkexec /usr/bin/usermod -aG input "$user" || true
+  if [[ ! $user =~ ^[-_.a-zA-Z0-9]+$ ]]; then
+    echo "installed $dest (skipped setfacl: unsafe username)" >&2
+    echo "installed $dest"
+    return 0
   fi
-  local node
-  for node in /sys/class/hidraw/*/device/uevent; do
-    [[ -f $node ]] || continue
-    grep -q '^DRIVER=magicmouse$' "$node" || continue
-    local dev="/dev/$(basename "$(dirname "$(dirname "$node")")")"
-    [[ -e $dev ]] || continue
+  local dev
+  while IFS= read -r dev; do
+    [[ -n $dev && -e $dev ]] || continue
     pkexec /usr/bin/setfacl -m "u:${user}:rw" "$dev" || true
-  done
+  done < <(python3 - <<'PY'
+import pathlib
+
+APPLE_TRACKPAD_VP = {
+    (0x05AC, 0x0265), (0x05AC, 0x0324), (0x05AC, 0x030E),
+    (0x004C, 0x0265), (0x004C, 0x0324), (0x004C, 0x030E),
+}
+
+def read_uevent(path):
+    data = {}
+    try:
+        for line in path.read_text().splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                data[key] = value
+    except OSError:
+        return {}
+    return data
+
+def parse_hid_id(hid_id):
+    parts = (hid_id or "").strip().split(":")
+    if len(parts) != 3:
+        return None
+    try:
+        return tuple(int(part, 16) for part in parts)
+    except ValueError:
+        return None
+
+def is_trackpad(data):
+    parsed = parse_hid_id(data.get("HID_ID", ""))
+    if parsed and (parsed[1], parsed[2]) in APPLE_TRACKPAD_VP:
+        return True
+    name = data.get("HID_NAME", "").lower()
+    return "trackpad" in name or "touchpad" in name
+
+root = pathlib.Path("/sys/class/hidraw")
+if not root.exists():
+    raise SystemExit(0)
+for entry in sorted(root.iterdir()):
+    data = read_uevent(entry / "device" / "uevent")
+    if is_trackpad(data):
+        print(f"/dev/{entry.name}")
+PY
+)
   echo "installed $dest"
 }
 
@@ -285,7 +379,7 @@ FEATURES="drag3fg swipe4 macosAccel"
 
 run_features() {
   python3 - "$STATE_JSON" "$LEGACY_STATE" "$PACK_LUA" "$HYPRLAND_LUA" "$MACOS_ACCEL" "$MARKER_BEGIN" "$@" <<'PY'
-import json, os, pathlib, subprocess, sys
+import json, os, pathlib, re, subprocess, sys
 
 KEYS = ("drag3fg", "swipe4", "macosAccel")
 LABELS = {
@@ -336,19 +430,54 @@ def save_state(state):
     return payload
 
 
+SAFE_DEVICE_NAME = re.compile(r"^[a-z0-9._-]+$")
+
+
+def hypr_internal_name(name):
+    # Match Hyprland deviceNameToInternalString: space/newline/comma -> '-', lower.
+    return "".join("-" if ch in " \n," else ch.lower() for ch in str(name))
+
+
+def lua_quote(name):
+    escaped = (
+        name.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
+    return f'"{escaped}"'
+
+
+def classify_trackpad_name(name):
+    if "magic-trackpad" in name or "magictrackpad" in name:
+        return 2
+    if "trackpad" in name or "touchpad" in name:
+        return 1
+    return 0
+
+
 def discover_devices():
-    names = set(FALLBACK_DEVICES)
+    preferred, weak = [], []
     try:
         raw = subprocess.check_output(["hyprctl", "devices", "-j"], text=True, timeout=2)
         data = json.loads(raw)
         for mouse in data.get("mice") or []:
-            name = str(mouse.get("name") or "")
-            lowered = name.lower()
-            if "magic-trackpad" in lowered or "magictrackpad" in lowered or "trackpad" in lowered:
-                names.add(name)
+            name = hypr_internal_name(mouse.get("name") or "")
+            if not SAFE_DEVICE_NAME.fullmatch(name):
+                continue
+            rank = classify_trackpad_name(name)
+            if rank >= 2:
+                preferred.append(name)
+            elif rank == 1:
+                weak.append(name)
     except Exception:
         pass
-    return sorted(names)
+    names = set(FALLBACK_DEVICES)
+    if preferred:
+        names.update(preferred)
+    else:
+        names.update(weak)
+    return sorted(name for name in names if SAFE_DEVICE_NAME.fullmatch(name))
 
 
 def render_lua(state):
@@ -362,7 +491,7 @@ def render_lua(state):
         return header + "return\n"
 
     devices = discover_devices()
-    quoted = ", ".join('"%s"' % name.replace('"', '\\"') for name in devices)
+    quoted = ", ".join(lua_quote(name) for name in devices)
     parts = [header]
     if state["macosAccel"]:
         parts.append(f'local macos_accel =\n  "{accel}"\n\n')
