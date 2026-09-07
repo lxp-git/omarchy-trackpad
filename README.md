@@ -21,6 +21,7 @@ The service applies the Hyprland features as soon as the plugin is enabled.
 
 - **Left click** — battery panel and the three feel switches
 - **Right click** — show or hide the percentage after the icon
+- **Panel switch** — the same "Show percentage" toggle
 - **Middle click** — refresh status
 
 The icon hides when the trackpad is disconnected. Feel settings stay applied.

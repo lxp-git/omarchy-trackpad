@@ -83,8 +83,7 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property color barIconColor: button.active && button.useActiveColor ? button.activeColor : button.foreground
-  readonly property real openPanelIndicatorWidth: barShowsPercent ? button.slotSize * 0.72 : 0
+  readonly property real openPanelIndicatorWidth: barShowsPercent && !button.vertical ? button.glyphPaintedWidth : 0
 
   property bool drag3fg: true
   property bool swipe4: true
@@ -248,34 +247,13 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
+    text: {
+      if (root.vertical) return Model.icon()
+      if (root.barShowsPercent) return Model.icon() + " " + root.percentage + "%"
+      return Model.icon()
+    }
     slotSize: Style.bar.iconSlot * (root.barShowsPercent ? 2 : 1)
     tooltipText: ""
-    iconComponent: Component {
-      Item {
-        TrackpadIcon {
-          id: padIcon
-          iconSize: Style.bar.iconCanvas
-          color: root.barIconColor
-          anchors.centerIn: parent
-          // Doubled slot centers the 16px canvas in 54px. Pull the pad back
-          // onto the same center as a normal 27px bar icon; percent grows right.
-          anchors.horizontalCenterOffset: root.barShowsPercent ? -(Style.bar.iconSlot / 2) : 0
-        }
-
-        Text {
-          visible: root.barShowsPercent
-          textFormat: Text.PlainText
-          text: root.percentage + "%"
-          color: root.barIconColor
-          font.family: root.fontFamily
-          font.pixelSize: Style.bar.iconFont
-          renderType: Text.NativeRendering
-          anchors.verticalCenter: padIcon.verticalCenter
-          anchors.left: padIcon.right
-          anchors.leftMargin: Style.space(4)
-        }
-      }
-    }
     onPressed: function(b) {
       if (!root.devicePresent) return
       if (b === Qt.RightButton) root.togglePercentage()
@@ -327,6 +305,9 @@ Panel {
             id: heroIcon
             iconSize: Style.font.display
             color: root.lowBattery ? root.urgent : root.foreground
+            lowColor: root.urgent
+            fraction: root.batteryFraction
+            low: root.lowBattery
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
           }
@@ -407,6 +388,18 @@ Panel {
               NumberAnimation { from: 0.55; to: 1.0; duration: 950; easing.type: Easing.InOutSine }
             }
           }
+        }
+
+        PanelSeparator { foreground: root.foreground }
+
+        Toggle {
+          width: parent.width
+          label: "Show percentage"
+          description: "Battery percent after the bar icon. Right-click also toggles this."
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          checked: root.showPercentage
+          onClicked: root.togglePercentage()
         }
 
         PanelSeparator { foreground: root.foreground }
