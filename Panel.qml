@@ -249,7 +249,7 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
-    opticalSize: Style.bar.iconCanvas + 2
+    opticalSize: Style.bar.iconCanvas
     slotSize: Style.bar.iconSlot * (root.barShowsPercent ? 2 : 1)
     tooltipText: ""
     iconComponent: Component {
@@ -263,7 +263,7 @@ Panel {
             text: Model.icon()
             color: root.barIconColor
             font.family: root.fontFamily
-            font.pixelSize: Style.font.iconLarge
+            font.pixelSize: Style.font.icon
             renderType: Text.NativeRendering
             anchors.verticalCenter: parent.verticalCenter
           }
