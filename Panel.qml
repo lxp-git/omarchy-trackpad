@@ -77,13 +77,14 @@ Panel {
   readonly property real batteryFraction: percentage < 0 ? 0 : percentage / 100
   readonly property bool charging: !!(battery && battery.status === "Charging")
   readonly property bool showPercentage: setting("showPercentage", true) === true
+  readonly property bool barShowsPercent: !vertical && showPercentage && percentage >= 0
   readonly property bool stale: !!(battery && battery.stale)
   readonly property bool lowBattery: devicePresent && !charging && !stale && percentage > 0 && percentage <= 20
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color barIconColor: button.active && button.useActiveColor ? button.activeColor : button.foreground
-  readonly property real openPanelIndicatorWidth: showPercentage && !button.vertical ? button.slotSize * 0.62 : 0
+  readonly property real openPanelIndicatorWidth: barShowsPercent ? button.slotSize * 0.72 : 0
 
   property bool drag3fg: true
   property bool swipe4: true
@@ -247,7 +248,7 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
-    slotSize: Style.bar.iconSlot * (!root.vertical && root.showPercentage && root.percentage >= 0 ? 2 : 1)
+    slotSize: Style.bar.iconSlot * (root.barShowsPercent ? 2 : 1)
     tooltipText: ""
     iconComponent: Component {
       Item {
@@ -256,10 +257,13 @@ Panel {
           iconSize: Style.bar.iconCanvas
           color: root.barIconColor
           anchors.centerIn: parent
+          // Doubled slot centers the 16px canvas in 54px. Pull the pad back
+          // onto the same center as a normal 27px bar icon; percent grows right.
+          anchors.horizontalCenterOffset: root.barShowsPercent ? -(Style.bar.iconSlot / 2) : 0
         }
 
         Text {
-          visible: !root.vertical && root.showPercentage && root.percentage >= 0
+          visible: root.barShowsPercent
           textFormat: Text.PlainText
           text: root.percentage + "%"
           color: root.barIconColor
