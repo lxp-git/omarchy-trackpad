@@ -21,10 +21,14 @@ Item {
     return status === "Charging" || status === "Full"
   }
 
+  // macOS Magic Trackpad/Mouse: one banner at ~2%, since at least Mojave.
+  // Do not treat kernel 0% / stale HID as a new discharge cycle.
+  readonly property int lowBatteryPercent: 2
+
   PersistentProperties {
     id: persisted
     reloadableId: "xuanping-trackpad"
-    property int lastNotifiedPercent: 100
+    property bool notifiedLow: false
   }
 
   function applyPack() {
@@ -40,19 +44,20 @@ Item {
   }
 
   function checkBattery() {
-    if (!battery || !battery.present || battery.stale || percentage <= 0 || charging) {
-      persisted.lastNotifiedPercent = 100
+    if (charging) {
+      persisted.notifiedLow = false
       return
     }
-    if (percentage <= 10 && persisted.lastNotifiedPercent > 10) {
-      notifyBattery(percentage, "critical")
-      persisted.lastNotifiedPercent = percentage
-    } else if (percentage <= 20 && persisted.lastNotifiedPercent > 20) {
-      notifyBattery(percentage, "normal")
-      persisted.lastNotifiedPercent = percentage
-    } else if (percentage > 20) {
-      persisted.lastNotifiedPercent = 100
+    if (!battery || !battery.present || battery.stale || percentage <= 0)
+      return
+    if (percentage <= lowBatteryPercent) {
+      if (!persisted.notifiedLow) {
+        notifyBattery(percentage, "critical")
+        persisted.notifiedLow = true
+      }
+      return
     }
+    persisted.notifiedLow = false
   }
 
   function notifyBattery(level, urgency) {
