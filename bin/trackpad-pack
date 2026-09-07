@@ -67,7 +67,7 @@ osd() {
 
 print_battery() {
   python3 - "$STATE_DIR/battery-cache.json" <<'PY'
-import fcntl, json, os, pathlib, sys, time
+import fcntl, json, os, pathlib, subprocess, sys, time
 
 CACHE = pathlib.Path(sys.argv[1])
 now = time.time()
@@ -83,8 +83,9 @@ def load_cache():
     if not CACHE.exists():
         return None
     try:
-        data = json.loads(CACHE.read_text())
-    except (OSError, json.JSONDecodeError):
+        raw = CACHE.read_text()
+        data, _ = json.JSONDecoder().raw_decode(raw)
+    except (OSError, json.JSONDecodeError, ValueError):
         return None
     if not isinstance(data, dict):
         return None
@@ -101,7 +102,9 @@ def save_cache(rec):
         "model": rec.get("model", ""),
         "savedAt": now,
     }
-    CACHE.write_text(json.dumps(payload) + "\n")
+    tmp = CACHE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload) + "\n")
+    tmp.replace(CACHE)
 
 def read_uevent(path):
     data = {}
@@ -225,6 +228,24 @@ def hidraw_devices():
         found.append((f"/dev/{entry.name}", name or "Magic Trackpad"))
     return found
 
+def hypr_trackpad_present():
+    try:
+        out = subprocess.check_output(
+            ["hyprctl", "devices", "-j"],
+            text=True,
+            timeout=1,
+            stderr=subprocess.DEVNULL,
+        )
+        data = json.loads(out)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
+        return False
+    for group in ("mice", "touchpads"):
+        for dev in data.get(group) or []:
+            name = str(dev.get("name") or "").lower()
+            if "magic-trackpad" in name or "trackpad" in name:
+                return True
+    return False
+
 def hidraw_battery():
     # Input report 0x90: [id, status_flags, capacity]. Bit 1 of status = charging.
     for dev, name in hidraw_devices():
@@ -273,36 +294,50 @@ chosen = {
     "stale": False,
 }
 
-if sys_rec:
-    hid_rec = None
-    if sys_rec.get("percentage", -1) <= 0:
-        hid_rec = hidraw_battery()
-    if hid_rec:
-        chosen = hid_rec
-    elif sys_rec.get("percentage", -1) > 0:
-        chosen = sys_rec
-    elif sys_rec.get("present"):
-        cache_age = now - float(cache.get("savedAt", 0)) if cache else 1e9
-        if cache and cache_age < 45:
-            chosen = {
-                "present": True,
-                "percentage": cache["percentage"],
-                "status": cache.get("status", "Discharging"),
-                "model": sys_rec.get("model") or cache.get("model", ""),
-                "path": sys_rec.get("path", ""),
-                "source": "cache",
-                "stale": True,
-            }
-        else:
-            chosen = {
-                "present": True,
-                "percentage": -1,
-                "status": sys_rec.get("status", "Unknown"),
-                "model": sys_rec.get("model", ""),
-                "path": sys_rec.get("path", ""),
-                "source": "sysfs",
-                "stale": False,
-            }
+def cache_rec(model="", path=""):
+    if not cache:
+        return None
+    return {
+        "present": True,
+        "percentage": cache["percentage"],
+        "status": cache.get("status", "Discharging"),
+        "model": model or cache.get("model", ""),
+        "path": path,
+        "source": "cache",
+        "stale": True,
+    }
+
+hid_rec = hidraw_battery() if (not sys_rec or sys_rec.get("percentage", -1) <= 0) else None
+connected = bool(sys_rec) or bool(hidraw_devices()) or hypr_trackpad_present()
+
+if hid_rec:
+    chosen = hid_rec
+elif sys_rec and sys_rec.get("percentage", -1) > 0:
+    chosen = sys_rec
+elif sys_rec and sys_rec.get("present"):
+    # Kernel 0% after a Bluetooth reset can last minutes. Keep the last
+    # good reading as stale so the bar icon stays up.
+    chosen = cache_rec(sys_rec.get("model", ""), sys_rec.get("path", "")) or {
+        "present": True,
+        "percentage": -1,
+        "status": sys_rec.get("status", "Unknown"),
+        "model": sys_rec.get("model", ""),
+        "path": sys_rec.get("path", ""),
+        "source": "sysfs",
+        "stale": False,
+    }
+elif connected:
+    chosen = cache_rec() or {
+        "present": True,
+        "percentage": -1,
+        "status": "Unknown",
+        "model": (cache or {}).get("model", ""),
+        "source": "hypr",
+        "stale": False,
+    }
+elif cache and (now - float(cache.get("savedAt", 0))) < 180:
+    # power_supply/hidraw can vanish for a few seconds during a BT rebind.
+    chosen = cache_rec()
 
 if chosen.get("present") and chosen.get("percentage", -1) > 0 and not chosen.get("stale"):
     save_cache(chosen)

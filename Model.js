@@ -138,7 +138,11 @@ function emptyBattery() {
 
 function parseBattery(raw) {
   try {
-    var parsed = JSON.parse(String(raw || "{}"))
+    var text = String(raw || "")
+    var start = text.indexOf("{")
+    var end = text.lastIndexOf("}")
+    if (start < 0 || end <= start) return emptyBattery()
+    var parsed = JSON.parse(text.substring(start, end + 1))
     var pct = parseInt(parsed.percentage, 10)
     if (!isFinite(pct)) pct = -1
     return {

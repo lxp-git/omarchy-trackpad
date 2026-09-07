@@ -20,6 +20,15 @@ Panel {
   readonly property var upowerDevices: UPower.devices ? UPower.devices.values : []
   readonly property var upowerDevice: Model.preferredDevice(upowerDevices)
   property var sysBattery: Model.emptyBattery()
+  property int absentStreak: 0
+  PersistentProperties {
+    id: held
+    reloadableId: "xuanping-trackpad-bar"
+    property bool present: false
+    property int percentage: -1
+    property string status: "Disconnected"
+    property string model: ""
+  }
   readonly property var upowerBattery: {
     var d = upowerDevice
     if (!d || d.isPresent === false) return null
@@ -48,13 +57,22 @@ Panel {
       source: "upower"
     }
   }
+  readonly property var heldBattery: held.present ? {
+    present: true,
+    percentage: held.percentage,
+    status: held.status,
+    model: held.model,
+    stale: true,
+    source: "hold"
+  } : null
   readonly property var battery: {
     if (sysBattery && sysBattery.present && sysBattery.percentage > 0) return sysBattery
     if (upowerBattery && upowerBattery.percentage > 0) return upowerBattery
     if (sysBattery && sysBattery.present) return sysBattery
-    return upowerBattery || sysBattery
+    if (upowerBattery) return upowerBattery
+    return heldBattery || sysBattery
   }
-  readonly property bool devicePresent: !!(battery && battery.present)
+  readonly property bool devicePresent: !!(battery && battery.present) || held.present
   readonly property int percentage: battery && isFinite(battery.percentage) ? battery.percentage : -1
   readonly property real batteryFraction: percentage < 0 ? 0 : percentage / 100
   readonly property bool charging: !!(battery && battery.status === "Charging")
@@ -102,6 +120,36 @@ Panel {
     root.drag3fg = parsed.drag3fg
     root.swipe4 = parsed.swipe4
     root.macosAccel = parsed.macosAccel
+  }
+
+  function applyBattery(parsed) {
+    if (parsed && parsed.present) {
+      var pct = parsed.percentage
+      var stale = !!parsed.stale
+      if (!(pct > 0) && held.percentage > 0) {
+        pct = held.percentage
+        stale = true
+      }
+      root.absentStreak = 0
+      root.sysBattery = {
+        present: true,
+        percentage: pct,
+        status: parsed.status || held.status,
+        model: parsed.model || held.model,
+        stale: stale,
+        source: parsed.source || ""
+      }
+      held.present = true
+      if (pct > 0) held.percentage = pct
+      if (parsed.status && parsed.status !== "Unknown") held.status = parsed.status
+      if (parsed.model) held.model = parsed.model
+      return
+    }
+    root.absentStreak += 1
+    if (root.absentStreak < 3 && held.present)
+      return
+    held.present = false
+    root.sysBattery = parsed || Model.emptyBattery()
   }
 
   function featureOn(key) {
@@ -162,7 +210,7 @@ Panel {
     id: batteryProc
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: { root.sysBattery = Model.parseBattery(text) }
+      onStreamFinished: { root.applyBattery(Model.parseBattery(text)) }
     }
   }
 
@@ -203,26 +251,24 @@ Panel {
     tooltipText: ""
     iconComponent: Component {
       Item {
-        Row {
+        TrackpadIcon {
+          id: padIcon
+          iconSize: Style.bar.iconCanvas
+          color: root.barIconColor
           anchors.centerIn: parent
-          spacing: Style.space(4)
+        }
 
-          TrackpadIcon {
-            iconSize: Style.bar.iconCanvas
-            color: root.barIconColor
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          Text {
-            visible: !root.vertical && root.showPercentage && root.percentage >= 0
-            textFormat: Text.PlainText
-            text: root.percentage + "%"
-            color: root.barIconColor
-            font.family: root.fontFamily
-            font.pixelSize: Style.bar.iconFont
-            renderType: Text.NativeRendering
-            anchors.verticalCenter: parent.verticalCenter
-          }
+        Text {
+          visible: !root.vertical && root.showPercentage && root.percentage >= 0
+          textFormat: Text.PlainText
+          text: root.percentage + "%"
+          color: root.barIconColor
+          font.family: root.fontFamily
+          font.pixelSize: Style.bar.iconFont
+          renderType: Text.NativeRendering
+          anchors.verticalCenter: padIcon.verticalCenter
+          anchors.left: padIcon.right
+          anchors.leftMargin: Style.space(4)
         }
       }
     }
