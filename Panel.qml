@@ -76,7 +76,8 @@ Panel {
   readonly property int percentage: battery && isFinite(battery.percentage) ? battery.percentage : -1
   readonly property real batteryFraction: percentage < 0 ? 0 : percentage / 100
   readonly property bool charging: !!(battery && battery.status === "Charging")
-  readonly property bool showPercentage: setting("showPercentage", true) === true
+  readonly property bool vertical: bar ? bar.vertical : false
+  readonly property bool showPercentage: setting("showPercentage", true) !== false
   readonly property bool barShowsPercent: !vertical && showPercentage && percentage >= 0
   readonly property bool stale: !!(battery && battery.stale)
   readonly property bool lowBattery: devicePresent && !charging && !stale && percentage > 0 && percentage <= 20
