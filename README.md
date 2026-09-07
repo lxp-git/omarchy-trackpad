@@ -24,8 +24,11 @@ The service applies the Hyprland features as soon as the plugin is enabled.
 
 The icon hides when the trackpad is disconnected. Feel settings stay applied.
 
-Low-battery notice matches macOS Magic Trackpad: **one** critical banner at
-**2%**, not 20%/10%, and not again until the pad is charged.
+Low-battery notices fire once at **20%** and once at **10%**. A Bluetooth
+reset, a kernel 0% reading, or a plugin reload does not count as a new
+discharge — the latch lives in
+`~/.local/state/omarchy/xuanping.trackpad/notify.json`. Charging, or a
+live reading above 20%, clears it.
 
 After a Bluetooth reconnect the kernel often reports **0%**. The plugin then
 reads HID report `0x90` from hidraw. That needs a one-time udev rule:

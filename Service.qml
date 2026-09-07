@@ -21,14 +21,32 @@ Item {
     return status === "Charging" || status === "Full"
   }
 
-  // macOS Magic Trackpad/Mouse: one banner at ~2%, since at least Mojave.
-  // Do not treat kernel 0% / stale HID as a new discharge cycle.
-  readonly property int lowBatteryPercent: 2
+  readonly property int warnPercent: 20
+  readonly property int criticalPercent: 10
+  readonly property string notifyDir: {
+    var home = Quickshell.env("HOME") || ""
+    var xdg = Quickshell.env("XDG_STATE_HOME")
+    var dir = (xdg && xdg.length) ? xdg : (home + "/.local/state")
+    return dir + "/omarchy/xuanping.trackpad"
+  }
+  readonly property string notifyPath: notifyDir + "/notify.json"
 
   PersistentProperties {
     id: persisted
     reloadableId: "xuanping-trackpad"
-    property bool notifiedLow: false
+    property int lastNotifiedPercent: 100
+  }
+
+  property bool notifyLoaded: false
+
+  FileView {
+    id: notifyFile
+    path: root.notifyPath
+    watchChanges: false
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.hydrateNotify(text())
+    onLoadFailed: root.hydrateNotify("")
   }
 
   function applyPack() {
@@ -43,21 +61,49 @@ Item {
     batteryProc.running = true
   }
 
+  function hydrateNotify(raw) {
+    if (notifyLoaded) return
+    try {
+      var text = String(raw || "")
+      var start = text.indexOf("{")
+      var end = text.lastIndexOf("}")
+      if (start >= 0 && end > start) {
+        var parsed = JSON.parse(text.substring(start, end + 1))
+        var n = parseInt(parsed.lastNotifiedPercent, 10)
+        if (isFinite(n) && n >= 0 && n <= 100)
+          persisted.lastNotifiedPercent = n
+      }
+    } catch (e) {
+    }
+    notifyLoaded = true
+    root.refreshBattery()
+  }
+
+  function setLastNotified(value) {
+    if (persisted.lastNotifiedPercent === value) return
+    persisted.lastNotifiedPercent = value
+    if (!notifyLoaded) return
+    notifyFile.setText(JSON.stringify({ lastNotifiedPercent: value }) + "\n")
+  }
+
   function checkBattery() {
+    if (!notifyLoaded) return
     if (charging) {
-      persisted.notifiedLow = false
+      setLastNotified(100)
       return
     }
+    // Kernel 0% / stale HID after a Bluetooth reset is not a new cycle.
     if (!battery || !battery.present || battery.stale || percentage <= 0)
       return
-    if (percentage <= lowBatteryPercent) {
-      if (!persisted.notifiedLow) {
-        notifyBattery(percentage, "critical")
-        persisted.notifiedLow = true
-      }
-      return
+    if (percentage <= criticalPercent && persisted.lastNotifiedPercent > criticalPercent) {
+      notifyBattery(percentage, "critical")
+      setLastNotified(percentage)
+    } else if (percentage <= warnPercent && persisted.lastNotifiedPercent > warnPercent) {
+      notifyBattery(percentage, "normal")
+      setLastNotified(percentage)
+    } else if (percentage > warnPercent) {
+      setLastNotified(100)
     }
-    persisted.notifiedLow = false
   }
 
   function notifyBattery(level, urgency) {
@@ -76,6 +122,10 @@ Item {
 
   Process { id: applyProc }
   Process { id: notifyProc }
+  Process {
+    id: mkdirProc
+    onExited: notifyFile.reload()
+  }
   Process {
     id: batteryProc
     stdout: StdioCollector {
@@ -97,6 +147,9 @@ Item {
 
   Component.onCompleted: {
     root.applyPack()
-    root.refreshBattery()
+    if (notifyDir && !mkdirProc.running) {
+      mkdirProc.command = ["mkdir", "-p", notifyDir]
+      mkdirProc.running = true
+    }
   }
 }
