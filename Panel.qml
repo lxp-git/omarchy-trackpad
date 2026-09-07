@@ -24,8 +24,19 @@ Panel {
     var d = upowerDevice
     if (!d || d.isPresent === false) return null
     var pct = Model.percentFromNumber(d.percentage)
-    if (pct <= 0) return null
-    if (d.state === UPowerDeviceState.Unknown) return null
+    var unknown = d.state === UPowerDeviceState.Unknown
+    // After a Bluetooth reset the kernel often reports 0% / Unknown.
+    // Keep the widget visible; do not treat that 0% as a real reading.
+    if (pct <= 0 || unknown) {
+      return {
+        present: true,
+        percentage: pct > 0 ? pct : -1,
+        status: unknown ? "Unknown" : "Discharging",
+        model: d.model || "",
+        stale: false,
+        source: "upower"
+      }
+    }
     var chargingNow = d.state === UPowerDeviceState.Charging || d.state === UPowerDeviceState.PendingCharge
     var full = d.state === UPowerDeviceState.FullyCharged
     return {
@@ -53,6 +64,8 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
+  readonly property color barIconColor: button.active && button.useActiveColor ? button.activeColor : button.foreground
+  readonly property real openPanelIndicatorWidth: showPercentage && !button.vertical ? button.slotSize * 0.62 : 0
 
   property bool drag3fg: true
   property bool swipe4: true
@@ -186,17 +199,42 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
-    text: {
-      if (root.vertical) return Model.icon()
-      if (root.showPercentage && root.percentage >= 0) return root.percentage + "% " + Model.icon()
-      return Model.icon()
-    }
-    slotSize: Style.bar.iconSlot * (!root.vertical && root.showPercentage ? 2 : 1)
+    slotSize: Style.bar.iconSlot * (!root.vertical && root.showPercentage && root.percentage >= 0 ? 2 : 1)
     tooltipText: ""
+    iconComponent: Component {
+      Item {
+        Row {
+          anchors.centerIn: parent
+          spacing: Style.space(4)
+
+          TrackpadIcon {
+            iconSize: Style.bar.iconCanvas
+            color: root.barIconColor
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Text {
+            visible: !root.vertical && root.showPercentage && root.percentage >= 0
+            textFormat: Text.PlainText
+            text: root.percentage + "%"
+            color: root.barIconColor
+            font.family: root.fontFamily
+            font.pixelSize: Style.bar.iconFont
+            renderType: Text.NativeRendering
+            anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+      }
+    }
     onPressed: function(b) {
       if (!root.devicePresent) return
-      if (b === Qt.MiddleButton) root.refreshPack()
-      else root.toggle()
+      if (b === Qt.RightButton) root.togglePercentage()
+      else if (b === Qt.MiddleButton) {
+        root.refreshBattery()
+        root.refreshPack()
+      } else {
+        root.toggle()
+      }
     }
   }
 
@@ -235,13 +273,10 @@ Panel {
           width: parent.width
           implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight, heroPercent.implicitHeight)
 
-          Text {
+          TrackpadIcon {
             id: heroIcon
-            textFormat: Text.PlainText
-            text: Model.icon()
+            iconSize: Style.font.display
             color: root.lowBattery ? root.urgent : root.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.display
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
           }
