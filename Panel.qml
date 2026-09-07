@@ -84,7 +84,8 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property real openPanelIndicatorWidth: barShowsPercent && !button.vertical ? button.glyphPaintedWidth : 0
+  readonly property color barIconColor: button.active && button.useActiveColor ? button.activeColor : button.foreground
+  readonly property real openPanelIndicatorWidth: barShowsPercent && !button.vertical ? button.slotSize * 0.72 : 0
 
   property bool drag3fg: true
   property bool swipe4: true
@@ -248,13 +249,38 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
-    text: {
-      if (root.vertical) return Model.icon()
-      if (root.barShowsPercent) return Model.icon() + " " + root.percentage + "%"
-      return Model.icon()
-    }
+    opticalSize: Style.bar.iconCanvas + 2
     slotSize: Style.bar.iconSlot * (root.barShowsPercent ? 2 : 1)
     tooltipText: ""
+    iconComponent: Component {
+      Item {
+        Row {
+          anchors.centerIn: parent
+          spacing: Style.space(3)
+
+          Text {
+            textFormat: Text.PlainText
+            text: Model.icon()
+            color: root.barIconColor
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.iconLarge
+            renderType: Text.NativeRendering
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Text {
+            visible: root.barShowsPercent
+            textFormat: Text.PlainText
+            text: root.percentage + "%"
+            color: root.barIconColor
+            font.family: root.fontFamily
+            font.pixelSize: Style.bar.iconFont
+            renderType: Text.NativeRendering
+            anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+      }
+    }
     onPressed: function(b) {
       if (!root.devicePresent) return
       if (b === Qt.RightButton) root.togglePercentage()
