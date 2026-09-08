@@ -18,7 +18,7 @@ class UdevEmbed(unittest.TestCase):
         rules = (ROOT / "udev" / "70-xuanping-trackpad-hidraw.rules").read_text()
         script = (ROOT / "bin" / "trackpad-pack").read_text()
         match = re.search(
-            r"UDEV_RULE=\$\(cat << 'EOF'\n(.*)\nEOF\n\)",
+            r"IFS= read -r -d '' UDEV_RULE << 'EOF' \|\| true\n(.*?)\nEOF\n",
             script,
             re.S,
         )
@@ -30,6 +30,9 @@ class UdevEmbed(unittest.TestCase):
         self.assertIn('TAG+="uaccess"', rules)
         self.assertNotIn("GROUP=", rules)
         self.assertNotIn("pkexec", script)
+        self.assertIn("PATH=/usr/bin:/bin", script)
+        self.assertNotIn("$(cat <<", script)
+        self.assertIn("printf '%s' \"$UDEV_RULE\" | \"$SUDO\"", script)
 
 
 class AtomicWrite(unittest.TestCase):

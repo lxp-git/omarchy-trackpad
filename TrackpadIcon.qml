@@ -1,8 +1,6 @@
 import QtQuick
 import qs.Commons
 
-// Hollow Magic Trackpad: landscape rounded outline, charge meter inside.
-// Filled slabs read as a blob at bar size; this is for the panel hero.
 Item {
   id: root
 

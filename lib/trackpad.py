@@ -7,6 +7,7 @@ import os
 import pwd
 import re
 import secrets
+import select
 import signal
 import stat
 import subprocess
@@ -257,21 +258,50 @@ def bounded_cmd(argv, max_bytes=MAX_CMD, timeout=2):
         start_new_session=True,
         env=_child_env(),
     )
+    deadline = time.monotonic() + timeout
+    out = bytearray()
+    fd = proc.stdout.fileno()
     try:
-        out, _ = proc.communicate(timeout=timeout)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            ready, _, _ = select.select([proc.stdout], [], [], remaining)
+            if not ready:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            chunk = os.read(fd, min(65536, max_bytes + 1 - len(out)))
+            if not chunk:
+                break
+            out += chunk
+            if len(out) > max_bytes:
+                _kill_group(proc, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    _kill_group(proc, signal.SIGKILL)
+                    proc.wait(timeout=1)
+                raise ValueError("command output too large")
+        rc = proc.wait(timeout=max(0.1, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _kill_group(proc, signal.SIGTERM)
         try:
-            proc.communicate(timeout=2)
+            proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
             _kill_group(proc, signal.SIGKILL)
-            proc.communicate(timeout=1)
+            proc.wait(timeout=1)
         raise
-    if out is None or len(out) > max_bytes:
-        raise ValueError("command output too large")
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, argv)
-    return out
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, argv)
+    return bytes(out)
+
+
+def show_osd(msg):
+    if not msg:
+        return
+    try:
+        bounded_cmd(["/usr/bin/omarchy-osd", "-i", "touchpad", "-m", msg], max_bytes=256, timeout=2)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
 
 
 def ioc(direction, type_, nr, size):
@@ -380,27 +410,18 @@ def hypr_devices_json():
 
 
 def discover_devices():
-    preferred, weak = [], []
-    data = hypr_devices_json()
-    mice = data.get("mice") or []
-    if not isinstance(mice, list):
-        mice = []
-    for mouse in mice[:MAX_DEVICES]:
-        if not isinstance(mouse, dict):
-            continue
-        name = hypr_internal_name(mouse.get("name") or "")
-        if not SAFE_DEVICE_NAME.fullmatch(name):
-            continue
-        rank = classify_trackpad_name(name)
-        if rank >= 2:
-            preferred.append(name)
-        elif rank == 1:
-            weak.append(name)
     names = set(FALLBACK_DEVICES)
-    if preferred:
-        names.update(preferred)
-    else:
-        names.update(weak)
+    data = hypr_devices_json()
+    for group in ("mice", "touchpads"):
+        items = data.get(group) or []
+        if not isinstance(items, list):
+            continue
+        for dev in items[:MAX_DEVICES]:
+            if not isinstance(dev, dict):
+                continue
+            name = hypr_internal_name(dev.get("name") or "")
+            if SAFE_DEVICE_NAME.fullmatch(name) and classify_trackpad_name(name) >= 2:
+                names.add(name)
     return sorted(name for name in names if SAFE_DEVICE_NAME.fullmatch(name))[:MAX_DEVICES]
 
 
@@ -945,6 +966,7 @@ def cmd_mutate(cmd, argv):
     try:
         changed, present = apply_overlay(hypr, state)
         emit(status_payload(state, present, changed, osd))
+        show_osd(osd)
     finally:
         os.close(hypr)
 

@@ -3,21 +3,20 @@
 # bytes are a literal in this file so sudo never reads the plugin checkout.
 
 set -euo pipefail
+export PATH=/usr/bin:/bin
+unset BASH_ENV ENV CDPATH
 
 PLUGIN_ID="xuanping.trackpad"
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$ROOT/lib/trackpad.py"
 PYTHON=/usr/bin/python3
 TIMEOUT=/usr/bin/timeout
-HEAD=/usr/bin/head
 SUDO=/usr/bin/sudo
-OSD=/usr/bin/omarchy-osd
 UDEV_DEST=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
-MAX_OUT=65536
 
 # Keep this literal identical to udev/70-xuanping-trackpad-hidraw.rules.
-# Root installs these bytes; it does not copy from the plugin directory.
-UDEV_RULE=$(cat << 'EOF'
+# Builtin read, not PATH cat. Root installs these bytes.
+IFS= read -r -d '' UDEV_RULE << 'EOF' || true
 # Magic Trackpad hidraw: seated user via logind uaccess.
 # Needed to read HID battery report 0x90 after a Bluetooth reconnect
 # (kernel power_supply often stays at 0%). Match the parent magicmouse
@@ -39,7 +38,6 @@ ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="
 ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
 ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
 EOF
-)
 
 usage() {
   cat <<EOF
@@ -64,28 +62,7 @@ need_user_helper() {
 
 run_py() {
   need_user_helper
-  local out rc=0
-  set +e
-  out=$("$TIMEOUT" -k 2 -- 20 "$PYTHON" -I -S "$PY" "$@" | "$HEAD" -c $((MAX_OUT + 1)))
-  rc=$?
-  set -e
-  LC_ALL=C
-  if (( ${#out} > MAX_OUT )); then
-    echo "helper output exceeded ${MAX_OUT} bytes" >&2
-    return 1
-  fi
-  (( rc == 0 )) || return "$rc"
-  printf '%s' "$out"
-  [[ $out == *$'\n' ]] || printf '\n'
-}
-
-maybe_osd() {
-  local json=$1
-  local msg
-  msg=$(printf '%s' "$json" | "$PYTHON" -I -S -c 'import json,sys; print(json.load(sys.stdin).get("osd") or "")')
-  if [[ -n $msg && -x $OSD ]]; then
-    "$OSD" -i touchpad -m "$msg" >/dev/null 2>&1 || true
-  fi
+  exec "$TIMEOUT" -k 2 -- 20 "$PYTHON" -I -S "$PY" "$@"
 }
 
 udev_hash() {
@@ -120,7 +97,8 @@ install_hidraw() {
     return 0
   fi
   require_tty install-hidraw
-  "$SUDO" /usr/bin/bash -c '
+  # Password from the tty; rule bytes on stdin so PATH cat never feeds sudo argv.
+  printf '%s' "$UDEV_RULE" | "$SUDO" /usr/bin/bash -c '
 set -euo pipefail
 dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
 old=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
@@ -132,9 +110,8 @@ fi
 [[ -d $dir ]] || { echo "missing $dir" >&2; exit 1; }
 tmp=$(/usr/bin/mktemp -p "$dir" .70-xuanping-trackpad-XXXXXX)
 trap "rm -f -- \"$tmp\"" EXIT
-cat > "$tmp" << "RULE"
-'"$UDEV_RULE"'
-RULE
+/usr/bin/head -c 8192 > "$tmp"
+[[ -s $tmp ]] || { echo "empty udev rule" >&2; exit 1; }
 /usr/bin/chmod 644 "$tmp"
 /usr/bin/mv -f -T -- "$tmp" "$dest"
 trap - EXIT
@@ -167,13 +144,7 @@ case "$cmd" in
   -h | --help | help)
     usage
     ;;
-  apply | set | toggle | enable | disable)
-    json=$(run_py "$@")
-    printf '%s' "$json"
-    [[ $json == *$'\n' ]] || printf '\n'
-    maybe_osd "$json"
-    ;;
-  status | battery | notify-get | notify-set | hidraw-status | uninstall)
+  apply | set | toggle | enable | disable | status | battery | notify-get | notify-set | hidraw-status | uninstall)
     run_py "$@"
     ;;
   install-hidraw)

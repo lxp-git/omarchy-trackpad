@@ -247,6 +247,7 @@ Panel {
 
   Process {
     id: hidrawInstallProc
+    environment: ({ PATH: "/usr/bin:/bin" })
     onExited: root.refreshHidraw()
   }
 
