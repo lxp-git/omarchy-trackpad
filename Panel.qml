@@ -12,11 +12,10 @@ Panel {
   ipcTarget: "xuanping.trackpad"
   manageIpc: false
 
-  readonly property string helper: {
-    var resolved = Model.helperPathFromUrl(Qt.resolvedUrl("bin/trackpad-pack"))
-    if (resolved && resolved.indexOf("trackpad-pack") >= 0) return resolved
-    return (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/xuanping.trackpad/bin/trackpad-pack"
-  }
+  readonly property string helper: Model.resolveHelper(Qt.resolvedUrl("bin/trackpad-pack"), Quickshell.env("HOME") || "")
+  readonly property var helperEnv: Model.helperEnv(function(k) { return Quickshell.env(k) })
+  property bool hidrawRuleInstalled: false
+  property bool hidrawReadable: false
   readonly property var upowerDevices: UPower.devices ? UPower.devices.values : []
   readonly property var upowerDevice: Model.preferredDevice(upowerDevices)
   property var sysBattery: Model.emptyBattery()
@@ -118,6 +117,21 @@ Panel {
     batteryProc.running = true
   }
 
+  function refreshHidraw() {
+    if (!helper || hidrawStatusProc.running) return
+    hidrawStatusProc.command = [helper, "hidraw-status"]
+    hidrawStatusProc.running = true
+  }
+
+  function installHidraw() {
+    if (!helper || hidrawInstallProc.running) return
+    hidrawInstallProc.command = [
+      "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+      "/usr/bin/bash", helper, "install-hidraw"
+    ]
+    hidrawInstallProc.running = true
+  }
+
   function applyStatus(parsed) {
     root.drag3fg = parsed.drag3fg
     root.swipe4 = parsed.swipe4
@@ -198,33 +212,42 @@ Panel {
   implicitHeight: devicePresent ? button.implicitHeight : 0
   onDevicePresentChanged: if (!devicePresent) close()
 
-  Process {
+  HelperProcess {
     id: statusProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.applyStatus(Model.parseStatus(text))
-      }
-    }
+    extraEnv: root.helperEnv
+    maxBytes: 8192
+    onAccepted: root.applyStatus(Model.parseStatus(text))
   }
 
-  Process {
+  HelperProcess {
     id: batteryProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: { root.applyBattery(Model.parseBattery(text)) }
+    extraEnv: root.helperEnv
+    maxBytes: 4096
+    onAccepted: root.applyBattery(Model.parseBattery(text))
+  }
+
+  HelperProcess {
+    id: packProc
+    extraEnv: root.helperEnv
+    maxBytes: 8192
+    onAccepted: root.applyStatus(Model.parseStatus(text))
+    onFinished: root.packBusy = false
+  }
+
+  HelperProcess {
+    id: hidrawStatusProc
+    extraEnv: root.helperEnv
+    maxBytes: 1024
+    onAccepted: {
+      var s = Model.parseHidraw(text)
+      root.hidrawRuleInstalled = s.ruleInstalled
+      root.hidrawReadable = s.readable
     }
   }
 
   Process {
-    id: packProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.applyStatus(Model.parseStatus(text))
-      }
-    }
-    onExited: root.packBusy = false
+    id: hidrawInstallProc
+    onExited: root.refreshHidraw()
   }
 
   Timer {
@@ -234,6 +257,7 @@ Panel {
     triggeredOnStart: true
     onTriggered: {
       root.refreshBattery()
+      root.refreshHidraw()
       if (root.opened) root.refreshPack()
     }
   }
@@ -241,6 +265,7 @@ Panel {
   Component.onCompleted: {
     root.refreshBattery()
     root.refreshPack()
+    root.refreshHidraw()
   }
 
   BarIconButton {
@@ -427,6 +452,17 @@ Panel {
           fontFamily: root.fontFamily
           checked: root.showPercentage
           onClicked: root.togglePercentage()
+        }
+
+        Toggle {
+          visible: !root.hidrawRuleInstalled && !root.hidrawReadable
+          width: parent.width
+          label: "Grant hidraw access"
+          description: "Opens a terminal for one sudo prompt. Needed so battery stays correct after a Bluetooth reconnect. Magic Trackpad only; no input group."
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          checked: false
+          onClicked: root.installHidraw()
         }
 
         PanelSeparator { foreground: root.foreground }

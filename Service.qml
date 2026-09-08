@@ -9,11 +9,8 @@ Item {
   property var shell: null
   property var settings: ({})
 
-  readonly property string helper: {
-    var resolved = Model.helperPathFromUrl(Qt.resolvedUrl("bin/trackpad-pack"))
-    if (resolved && resolved.indexOf("trackpad-pack") >= 0) return resolved
-    return (Quickshell.env("HOME") || "") + "/.config/omarchy/plugins/xuanping.trackpad/bin/trackpad-pack"
-  }
+  readonly property string helper: Model.resolveHelper(Qt.resolvedUrl("bin/trackpad-pack"), Quickshell.env("HOME") || "")
+  readonly property var helperEnv: Model.helperEnv(function(k) { return Quickshell.env(k) })
   property var battery: Model.emptyBattery()
   readonly property int percentage: battery && isFinite(battery.percentage) ? battery.percentage : -1
   readonly property bool charging: {
@@ -23,13 +20,6 @@ Item {
 
   readonly property int warnPercent: 20
   readonly property int criticalPercent: 10
-  readonly property string notifyDir: {
-    var home = Quickshell.env("HOME") || ""
-    var xdg = Quickshell.env("XDG_STATE_HOME")
-    var dir = (xdg && xdg.length) ? xdg : (home + "/.local/state")
-    return dir + "/omarchy/xuanping.trackpad"
-  }
-  readonly property string notifyPath: notifyDir + "/notify.json"
 
   PersistentProperties {
     id: persisted
@@ -39,26 +29,10 @@ Item {
 
   property bool notifyLoaded: false
 
-  FileView {
-    id: notifyFile
-    path: root.notifyPath
-    watchChanges: false
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.hydrateNotify(text())
-    onLoadFailed: root.hydrateNotify("")
-  }
-
   function applyPack() {
     if (!helper || applyProc.running) return
     applyProc.command = [helper, "apply"]
     applyProc.running = true
-  }
-
-  function ensureHidraw() {
-    if (!helper || hidrawProc.running) return
-    hidrawProc.command = [helper, "install-hidraw", "--if-needed"]
-    hidrawProc.running = true
   }
 
   function refreshBattery() {
@@ -67,20 +41,15 @@ Item {
     batteryProc.running = true
   }
 
+  function loadNotify() {
+    if (!helper || notifyGetProc.running) return
+    notifyGetProc.command = [helper, "notify-get"]
+    notifyGetProc.running = true
+  }
+
   function hydrateNotify(raw) {
     if (notifyLoaded) return
-    try {
-      var text = String(raw || "")
-      var start = text.indexOf("{")
-      var end = text.lastIndexOf("}")
-      if (start >= 0 && end > start) {
-        var parsed = JSON.parse(text.substring(start, end + 1))
-        var n = parseInt(parsed.lastNotifiedPercent, 10)
-        if (isFinite(n) && n >= 0 && n <= 100)
-          persisted.lastNotifiedPercent = n
-      }
-    } catch (e) {
-    }
+    persisted.lastNotifiedPercent = Model.parseNotify(raw)
     notifyLoaded = true
     root.refreshBattery()
   }
@@ -88,8 +57,9 @@ Item {
   function setLastNotified(value) {
     if (persisted.lastNotifiedPercent === value) return
     persisted.lastNotifiedPercent = value
-    if (!notifyLoaded) return
-    notifyFile.setText(JSON.stringify({ lastNotifiedPercent: value }) + "\n")
+    if (!notifyLoaded || !helper || notifySetProc.running) return
+    notifySetProc.command = [helper, "notify-set", String(value)]
+    notifySetProc.running = true
   }
 
   function checkBattery() {
@@ -98,7 +68,6 @@ Item {
       setLastNotified(100)
       return
     }
-    // Kernel 0% / stale HID after a Bluetooth reset is not a new cycle.
     if (!battery || !battery.present || battery.stale || percentage <= 0)
       return
     if (percentage <= criticalPercent && persisted.lastNotifiedPercent > criticalPercent) {
@@ -114,33 +83,50 @@ Item {
 
   function notifyBattery(level, urgency) {
     if (notifyProc.running) return
+    var n = parseInt(level, 10)
+    if (!isFinite(n) || n < 1 || n > 100) return
     notifyProc.command = [
-      "omarchy-notification-send",
+      "/usr/bin/omarchy-notification-send",
       "--app-name", "Trackpad",
       "-g", "󰟸",
       "-u", urgency,
       "-t", "15000",
       "Trackpad battery",
-      "Down to " + level + "%"
+      "Down to " + n + "%"
     ]
     notifyProc.running = true
   }
 
-  Process { id: applyProc }
-  Process { id: hidrawProc }
-  Process { id: notifyProc }
-  Process {
-    id: mkdirProc
-    onExited: notifyFile.reload()
+  HelperProcess {
+    id: applyProc
+    extraEnv: root.helperEnv
+    maxBytes: 8192
   }
+
+  HelperProcess {
+    id: notifyGetProc
+    extraEnv: root.helperEnv
+    maxBytes: 1024
+    onAccepted: root.hydrateNotify(text)
+  }
+
+  HelperProcess {
+    id: notifySetProc
+    extraEnv: root.helperEnv
+    maxBytes: 1024
+  }
+
   Process {
+    id: notifyProc
+  }
+
+  HelperProcess {
     id: batteryProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.battery = Model.parseBattery(text)
-        root.checkBattery()
-      }
+    extraEnv: root.helperEnv
+    maxBytes: 4096
+    onAccepted: {
+      root.battery = Model.parseBattery(text)
+      root.checkBattery()
     }
   }
 
@@ -154,10 +140,6 @@ Item {
 
   Component.onCompleted: {
     root.applyPack()
-    root.ensureHidraw()
-    if (notifyDir && !mkdirProc.running) {
-      mkdirProc.command = ["mkdir", "-p", notifyDir]
-      mkdirProc.running = true
-    }
+    root.loadNotify()
   }
 }

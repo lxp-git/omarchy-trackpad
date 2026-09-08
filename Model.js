@@ -8,6 +8,42 @@ function helperPathFromUrl(url) {
   return text
 }
 
+function safeHelperPath(path) {
+  var text = String(path || "")
+  if (text.charAt(0) !== "/") return ""
+  if (text.length < 18 || text.length > 512) return ""
+  if (!/^[A-Za-z0-9._/+\-]+$/.test(text)) return ""
+  if (text.indexOf("/../") >= 0 || text.indexOf("/..") === text.length - 3) return ""
+  if (text.substring(text.length - 17) !== "/bin/trackpad-pack") return ""
+  return text
+}
+
+function helperEnv(qsEnv) {
+  var env = { PATH: "/usr/bin:/bin", LC_ALL: "C.UTF-8" }
+  var keys = [
+    "HOME", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+    "XDG_STATE_HOME", "WAYLAND_DISPLAY", "HYPRLAND_INSTANCE_SIGNATURE",
+    "DBUS_SESSION_BUS_ADDRESS"
+  ]
+  for (var i = 0; i < keys.length; i++) {
+    var v = qsEnv(keys[i])
+    if (v) env[keys[i]] = String(v)
+  }
+  return env
+}
+
+function plain(value, max) {
+  var text = String(value == null ? "" : value)
+  if (text.length > max) text = text.substring(0, max)
+  return text.replace(/[<>&]/g, "").replace(/[\x00-\x1F\x7F-\x9F]/g, "")
+}
+
+function resolveHelper(url, home) {
+  var fromUrl = safeHelperPath(helperPathFromUrl(url))
+  if (fromUrl) return fromUrl
+  return safeHelperPath(String(home || "") + "/.config/omarchy/plugins/xuanping.trackpad/bin/trackpad-pack")
+}
+
 function deviceList(devices) {
   if (!devices) return []
   if (devices.values && devices.values !== devices) return deviceList(devices.values)
@@ -97,7 +133,7 @@ function stateLabel(device, states) {
 }
 
 function displayName(device) {
-  var model = modelText(device)
+  var model = plain(modelText(device), 64)
   return model || "Trackpad"
 }
 
@@ -117,7 +153,9 @@ function flagValue(parsed, key) {
 function parseStatus(raw) {
   var fallback = defaultFeatures()
   try {
-    var parsed = JSON.parse(String(raw || "{}"))
+    var text = String(raw || "{}")
+    if (text.length > 8192) throw new Error("status too large")
+    var parsed = JSON.parse(text)
     return {
       drag3fg: flagValue(parsed, "drag3fg"),
       swipe4: flagValue(parsed, "swipe4"),
@@ -132,6 +170,33 @@ function parseStatus(raw) {
   }
 }
 
+function parseNotify(raw) {
+  try {
+    var text = String(raw || "")
+    if (text.length > 1024) return 100
+    var parsed = JSON.parse(text)
+    var n = parseInt(parsed.lastNotifiedPercent, 10)
+    if (!isFinite(n) || n < 0 || n > 100) return 100
+    return n
+  } catch (e) {
+    return 100
+  }
+}
+
+function parseHidraw(raw) {
+  try {
+    var text = String(raw || "")
+    if (text.length > 1024) return { ruleInstalled: false, readable: false }
+    var parsed = JSON.parse(text)
+    return {
+      ruleInstalled: parsed.ruleInstalled === true,
+      readable: parsed.readable === true
+    }
+  } catch (e) {
+    return { ruleInstalled: false, readable: false }
+  }
+}
+
 function emptyBattery() {
   return { present: false, percentage: -1, status: "Disconnected", model: "", stale: false, source: "none" }
 }
@@ -139,19 +204,20 @@ function emptyBattery() {
 function parseBattery(raw) {
   try {
     var text = String(raw || "")
+    if (text.length > 8192) return emptyBattery()
     var start = text.indexOf("{")
     var end = text.lastIndexOf("}")
     if (start < 0 || end <= start) return emptyBattery()
     var parsed = JSON.parse(text.substring(start, end + 1))
     var pct = parseInt(parsed.percentage, 10)
-    if (!isFinite(pct)) pct = -1
+    if (!isFinite(pct) || pct < -1 || pct > 100) pct = -1
     return {
       present: parsed.present === true,
       percentage: pct,
-      status: String(parsed.status || "Unknown"),
-      model: String(parsed.model || ""),
+      status: plain(parsed.status || "Unknown", 24) || "Unknown",
+      model: plain(parsed.model || "", 96),
       stale: parsed.stale === true,
-      source: String(parsed.source || "")
+      source: plain(parsed.source || "", 16)
     }
   } catch (e) {
     return emptyBattery()

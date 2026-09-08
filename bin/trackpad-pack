@@ -1,618 +1,165 @@
-#!/usr/bin/env bash
-# Apply xuanping.trackpad Hyprland features. Missing state means all on.
+#!/usr/bin/bash
+# User-level dispatcher. The Python helper refuses root. The udev rule
+# bytes are a literal in this file so sudo never reads the plugin checkout.
 
 set -euo pipefail
 
 PLUGIN_ID="xuanping.trackpad"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/${PLUGIN_ID}"
-STATE_JSON="$STATE_DIR/features.json"
-LEGACY_STATE="$STATE_DIR/enabled"
-HYPR_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-PACK_LUA="$HYPR_DIR/xuanping-trackpad.lua"
-HYPRLAND_LUA="$HYPR_DIR/hyprland.lua"
-MARKER_BEGIN="-- BEGIN xuanping.trackpad"
-MARKER_END="-- END xuanping.trackpad"
-REQUIRE_LINE='pcall(require, "hypr.xuanping-trackpad")'
-MACOS_ACCEL="custom 0.5 0.0 0.05 0.11 0.195 0.32 0.494 0.735 1.06 1.488 2.05 2.775 3.69 4.83 6.235 7.95 9.994 12.4 15.2 17.1 18.05 19.0 19.95"
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="$ROOT/lib/trackpad.py"
+PYTHON=/usr/bin/python3
+TIMEOUT=/usr/bin/timeout
+HEAD=/usr/bin/head
+SUDO=/usr/bin/sudo
+OSD=/usr/bin/omarchy-osd
+UDEV_DEST=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
+MAX_OUT=65536
+
+# Keep this literal identical to udev/70-xuanping-trackpad-hidraw.rules.
+# Root installs these bytes; it does not copy from the plugin directory.
+UDEV_RULE=$(cat << 'EOF'
+# Magic Trackpad hidraw: seated user via logind uaccess.
+# Needed to read HID battery report 0x90 after a Bluetooth reconnect
+# (kernel power_supply often stays at 0%). Match the parent magicmouse
+# HID driver and Apple trackpad IDs only (USB 05ac:0265 / 05ac:0324 /
+# 05ac:030e, BT 004c:0265 / 004c:0324 / 004c:030e). Do not match Magic Mouse
+# or a device that only has "Trackpad" in a self-reported name string.
+#
+# Filename must sort before 73-seat-late.rules so TAG+="uaccess" is applied.
+# Bluetooth hidraw sits under /devices/virtual/misc/uhid and has no seat;
+# ENV{ID_SEAT}="seat0" is what makes logind write the ACL.
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0265.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:030E.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0324.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0265.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:030E.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0324.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:05AC:030E.*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0265", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
+EOF
+)
 
 usage() {
   cat <<EOF
 Usage: trackpad-pack <command>
 
-  apply                         Write Hyprland config from saved state (default: all on)
-  status                        Print JSON
+  apply                         Write Hyprland overlay from saved state (default: all on)
+  status                        Print JSON (read-only; does not edit hyprland.lua)
   set <drag3fg|swipe4|macosAccel> <on|off>
   toggle <drag3fg|swipe4|macosAccel>
   battery                       Print HID trackpad battery JSON
-  install-hidraw [--if-needed]  udev rule (uaccess) so Bluetooth reconnects can read report 0x90
+  hidraw-status                 Whether the udev rule is present and hidraw is readable
+  install-hidraw [--if-needed]  Install the Magic Trackpad udev rule via sudo in a terminal
+  uninstall-hidraw              Remove this plugin's udev rule via sudo in a terminal
+  uninstall                     Remove this plugin's Hyprland overlay and state files
 EOF
 }
 
-ensure_require() {
-  mkdir -p "$HYPR_DIR"
-  python3 - "$HYPRLAND_LUA" "$MARKER_BEGIN" "$REQUIRE_LINE" "$MARKER_END" <<'PY'
-import pathlib, sys
-
-path = pathlib.Path(sys.argv[1])
-begin, require_line, end = sys.argv[2], sys.argv[3], sys.argv[4]
-block = f"{begin}\n{require_line}\n{end}\n"
-text = path.read_text() if path.exists() else ""
-if begin in text:
-    raise SystemExit(0)
-needle = 'require("hypr.input")'
-idx = text.find(needle)
-if idx >= 0:
-    nl = text.find("\n", idx)
-    insert_at = nl + 1 if nl >= 0 else len(text)
-    text = text[:insert_at] + "\n" + block + "\n" + text[insert_at:]
-else:
-    text = text.rstrip() + ("\n\n" if text.strip() else "") + block + "\n"
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(text)
-PY
+need_user_helper() {
+  [[ -f $PY && ! -L $PY ]] || { echo "missing helper: $PY" >&2; return 1; }
+  [[ -x $PYTHON ]] || { echo "missing $PYTHON" >&2; return 1; }
 }
 
-reload_hypr() {
-  if command -v hyprctl >/dev/null 2>&1; then
-    hyprctl reload >/dev/null
+run_py() {
+  need_user_helper
+  local out rc=0
+  set +e
+  out=$("$TIMEOUT" -k 2 -- 20 "$PYTHON" -I -S "$PY" "$@" | "$HEAD" -c $((MAX_OUT + 1)))
+  rc=$?
+  set -e
+  LC_ALL=C
+  if (( ${#out} > MAX_OUT )); then
+    echo "helper output exceeded ${MAX_OUT} bytes" >&2
+    return 1
+  fi
+  (( rc == 0 )) || return "$rc"
+  printf '%s' "$out"
+  [[ $out == *$'\n' ]] || printf '\n'
+}
+
+maybe_osd() {
+  local json=$1
+  local msg
+  msg=$(printf '%s' "$json" | "$PYTHON" -I -S -c 'import json,sys; print(json.load(sys.stdin).get("osd") or "")')
+  if [[ -n $msg && -x $OSD ]]; then
+    "$OSD" -i touchpad -m "$msg" >/dev/null 2>&1 || true
   fi
 }
 
-osd() {
-  local msg=$1
-  if command -v omarchy-osd >/dev/null 2>&1; then
-    omarchy-osd -i touchpad -m "$msg" >/dev/null 2>&1 || true
+udev_hash() {
+  printf '%s' "$UDEV_RULE" | /usr/bin/sha256sum | /usr/bin/cut -d' ' -f1
+}
+
+udev_installed() {
+  [[ -f $UDEV_DEST && ! -L $UDEV_DEST ]] || return 1
+  local have
+  have=$(/usr/bin/sha256sum -- "$UDEV_DEST" | /usr/bin/cut -d' ' -f1)
+  [[ $have == "$(udev_hash)" ]]
+}
+
+require_tty() {
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    echo "This command needs a terminal so you can confirm the sudo prompt." >&2
+    echo "  $0 $1" >&2
+    return 2
   fi
-}
-
-print_battery() {
-  python3 - "$STATE_DIR/battery-cache.json" <<'PY'
-import fcntl, json, os, pathlib, subprocess, sys, time
-
-CACHE = pathlib.Path(sys.argv[1])
-now = time.time()
-
-IOC_READ, IOC_WRITE = 2, 1
-IOC_NRSHIFT, IOC_TYPESHIFT, IOC_SIZESHIFT, IOC_DIRSHIFT = 0, 8, 16, 30
-
-def ioc(direction, type_, nr, size):
-    return ((direction << IOC_DIRSHIFT) | (ord(type_) << IOC_TYPESHIFT)
-            | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT))
-
-def load_cache():
-    if not CACHE.exists():
-        return None
-    try:
-        raw = CACHE.read_text()
-        data, _ = json.JSONDecoder().raw_decode(raw)
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    pct = data.get("percentage")
-    if not isinstance(pct, int) or pct <= 0:
-        return None
-    return data
-
-def save_cache(rec):
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "percentage": rec["percentage"],
-        "status": rec.get("status", "Discharging"),
-        "model": rec.get("model", ""),
-        "savedAt": now,
-    }
-    tmp = CACHE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload) + "\n")
-    tmp.replace(CACHE)
-
-def read_uevent(path):
-    data = {}
-    try:
-        for line in path.read_text().splitlines():
-            if "=" in line:
-                key, value = line.split("=", 1)
-                data[key] = value
-    except OSError:
-        return None
-    return data
-
-# Kernel HID_ID is bus:vendor:product as %04X:%08X:%08X.
-# USB Apple 05ac / BT Apple 004c; trackpad PIDs 0265, 0324 (USB-C), 030e (1st gen).
-APPLE_TRACKPAD_VP = frozenset({
-    (0x05AC, 0x0265), (0x05AC, 0x0324), (0x05AC, 0x030E),
-    (0x004C, 0x0265), (0x004C, 0x0324), (0x004C, 0x030E),
-})
-
-def parse_hid_id(hid_id):
-    parts = (hid_id or "").strip().split(":")
-    if len(parts) != 3:
-        return None
-    try:
-        return tuple(int(part, 16) for part in parts)
-    except ValueError:
-        return None
-
-def is_apple_trackpad_id(hid_id):
-    parsed = parse_hid_id(hid_id)
-    if not parsed:
-        return False
-    _bus, vendor, product = parsed
-    return (vendor, product) in APPLE_TRACKPAD_VP
-
-def text_has_trackpad(blob):
-    lowered = (blob or "").lower()
-    return "trackpad" in lowered or "touchpad" in lowered
-
-def hid_info_from(path):
-    cur = pathlib.Path(path)
-    seen = set()
-    for _ in range(8):
-        try:
-            cur = cur.resolve()
-        except OSError:
-            return {}
-        key = str(cur)
-        if key in seen:
-            break
-        seen.add(key)
-        data = read_uevent(cur / "uevent") or {}
-        if data.get("HID_ID") or data.get("HID_NAME"):
-            return data
-        nxt = cur / "device"
-        if nxt.exists():
-            cur = nxt
-            continue
-        parent = cur.parent
-        if parent == cur:
-            break
-        cur = parent
-    return {}
-
-def is_trackpad_hid(name, hid_id):
-    if is_apple_trackpad_id(hid_id):
-        return True
-    return text_has_trackpad(name)
-
-def sysfs_battery():
-    root = pathlib.Path("/sys/class/power_supply")
-    best, best_score = None, -1
-    if not root.exists():
-        return None
-    for path in sorted(root.iterdir()):
-        data = read_uevent(path / "uevent")
-        if not data or data.get("POWER_SUPPLY_TYPE") != "Battery":
-            continue
-        if data.get("POWER_SUPPLY_SCOPE") != "Device":
-            continue
-        model = data.get("POWER_SUPPLY_MODEL_NAME", "")
-        name = data.get("POWER_SUPPLY_NAME", "")
-        hid = hid_info_from(path)
-        hid_name = hid.get("HID_NAME", "")
-        hid_id = hid.get("HID_ID", "")
-        blob = f"{model} {name} {hid_name}"
-        if is_apple_trackpad_id(hid_id):
-            score = 3
-        elif text_has_trackpad(blob):
-            score = 2
-        else:
-            continue
-        try:
-            capacity = int(data.get("POWER_SUPPLY_CAPACITY", "-1"))
-        except ValueError:
-            capacity = -1
-        rec = {
-            "present": data.get("POWER_SUPPLY_PRESENT", "1") == "1",
-            "percentage": capacity,
-            "status": data.get("POWER_SUPPLY_STATUS", "Unknown"),
-            "model": model or hid_name or name,
-            "path": str(path),
-            "source": "sysfs",
-            "stale": False,
-        }
-        if score > best_score:
-            best, best_score = rec, score
-    return best
-
-def hidraw_devices():
-    sysfs = pathlib.Path("/sys/class/hidraw")
-    if not sysfs.exists():
-        return []
-    found = []
-    for entry in sorted(sysfs.iterdir()):
-        data = read_uevent(entry / "device" / "uevent") or {}
-        name = data.get("HID_NAME", "")
-        hid_id = data.get("HID_ID", "")
-        if not is_trackpad_hid(name, hid_id):
-            continue
-        found.append((f"/dev/{entry.name}", name or "Magic Trackpad"))
-    return found
-
-def hypr_trackpad_present():
-    try:
-        out = subprocess.check_output(
-            ["hyprctl", "devices", "-j"],
-            text=True,
-            timeout=1,
-            stderr=subprocess.DEVNULL,
-        )
-        data = json.loads(out)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, ValueError):
-        return False
-    for group in ("mice", "touchpads"):
-        for dev in data.get(group) or []:
-            name = str(dev.get("name") or "").lower()
-            if "magic-trackpad" in name or "trackpad" in name:
-                return True
-    return False
-
-def hidraw_battery():
-    # Input report 0x90: [id, status_flags, capacity]. Bit 1 of status = charging.
-    for dev, name in hidraw_devices():
-        try:
-            fd = os.open(dev, os.O_RDWR)
-        except OSError:
-            continue
-        try:
-            for size in (3, 4, 8):
-                buf = bytearray(size)
-                buf[0] = 0x90
-                try:
-                    fcntl.ioctl(fd, ioc(IOC_READ | IOC_WRITE, "H", 0x0A, size), buf)
-                except OSError:
-                    try:
-                        fcntl.ioctl(fd, ioc(IOC_READ | IOC_WRITE, "H", 0x07, size), buf)
-                    except OSError:
-                        continue
-                if buf[0] not in (0x90, 0) and size > 1:
-                    continue
-                capacity = buf[2] if size > 2 else -1
-                if not (0 < capacity <= 100):
-                    continue
-                charging = bool(buf[1] & 0x02) if size > 1 else False
-                return {
-                    "present": True,
-                    "percentage": int(capacity),
-                    "status": "Charging" if charging else "Discharging",
-                    "model": name,
-                    "path": dev,
-                    "source": "hidraw",
-                    "stale": False,
-                }
-        finally:
-            os.close(fd)
-    return None
-
-sys_rec = sysfs_battery()
-cache = load_cache()
-chosen = {
-    "present": False,
-    "percentage": -1,
-    "status": "Disconnected",
-    "model": "",
-    "source": "none",
-    "stale": False,
-}
-
-def cache_rec(model="", path=""):
-    if not cache:
-        return None
-    return {
-        "present": True,
-        "percentage": cache["percentage"],
-        "status": cache.get("status", "Discharging"),
-        "model": model or cache.get("model", ""),
-        "path": path,
-        "source": "cache",
-        "stale": True,
-    }
-
-hid_rec = hidraw_battery() if (not sys_rec or sys_rec.get("percentage", -1) <= 0) else None
-connected = bool(sys_rec) or bool(hidraw_devices()) or hypr_trackpad_present()
-
-if hid_rec:
-    chosen = hid_rec
-elif sys_rec and sys_rec.get("percentage", -1) > 0:
-    chosen = sys_rec
-elif sys_rec and sys_rec.get("present"):
-    # Kernel 0% after a Bluetooth reset can last minutes. Keep the last
-    # good reading as stale so the bar icon stays up.
-    chosen = cache_rec(sys_rec.get("model", ""), sys_rec.get("path", "")) or {
-        "present": True,
-        "percentage": -1,
-        "status": sys_rec.get("status", "Unknown"),
-        "model": sys_rec.get("model", ""),
-        "path": sys_rec.get("path", ""),
-        "source": "sysfs",
-        "stale": False,
-    }
-elif connected:
-    chosen = cache_rec() or {
-        "present": True,
-        "percentage": -1,
-        "status": "Unknown",
-        "model": (cache or {}).get("model", ""),
-        "source": "hypr",
-        "stale": False,
-    }
-elif cache and (now - float(cache.get("savedAt", 0))) < 180:
-    # power_supply/hidraw can vanish for a few seconds during a BT rebind.
-    chosen = cache_rec()
-
-if chosen.get("present") and chosen.get("percentage", -1) > 0 and not chosen.get("stale"):
-    save_cache(chosen)
-print(json.dumps(chosen))
-PY
 }
 
 install_hidraw() {
-  local rule_src dest old if_needed=0
-  rule_src="$(cd "$(dirname "$0")/.." && pwd)/udev/70-xuanping-trackpad-hidraw.rules"
-  dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
-  old=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
+  local if_needed=0
   [[ ${1:-} == --if-needed ]] && if_needed=1
-  [[ -f $rule_src ]] || { echo "missing udev rule: $rule_src" >&2; return 1; }
-  if [[ $if_needed -eq 1 && -f $dest && ! -e $old ]] && cmp -s "$rule_src" "$dest"; then
+  case $UDEV_RULE in *\'*|*$'\r'*) echo "refusing udev rule with quote or CR" >&2; return 1 ;; esac
+  if udev_installed; then
+    echo "already installed $UDEV_DEST"
     return 0
   fi
-  pkexec /usr/bin/bash -c 'set -euo pipefail
-src=$1 dest=$2 old=$3
-/usr/bin/install -m 644 "$src" "$dest"
-/usr/bin/rm -f "$old"
+  if (( if_needed == 1 )) && [[ ! -t 0 || ! -t 1 ]]; then
+    echo "hidraw udev rule not installed; run: $0 install-hidraw" >&2
+    return 0
+  fi
+  require_tty install-hidraw
+  "$SUDO" /usr/bin/bash -c '
+set -euo pipefail
+dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
+old=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
+dir=/etc/udev/rules.d
+if [[ -L $dir || -L $dest ]]; then
+  echo "refusing symlink at udev destination" >&2
+  exit 1
+fi
+[[ -d $dir ]] || { echo "missing $dir" >&2; exit 1; }
+tmp=$(/usr/bin/mktemp -p "$dir" .70-xuanping-trackpad-XXXXXX)
+trap "rm -f -- \"$tmp\"" EXIT
+cat > "$tmp" << "RULE"
+'"$UDEV_RULE"'
+RULE
+/usr/bin/chmod 644 "$tmp"
+/usr/bin/mv -f -T -- "$tmp" "$dest"
+trap - EXIT
+/usr/bin/rm -f -- "$old"
 /usr/bin/udevadm control --reload-rules
 /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
-' bash "$rule_src" "$dest" "$old"
-  echo "installed $dest"
+'
+  echo "installed $UDEV_DEST"
 }
 
-FEATURES="drag3fg swipe4 macosAccel"
-
-run_features() {
-  python3 - "$STATE_JSON" "$LEGACY_STATE" "$PACK_LUA" "$HYPRLAND_LUA" "$MACOS_ACCEL" "$MARKER_BEGIN" "$@" <<'PY'
-import json, os, pathlib, re, subprocess, sys
-
-KEYS = ("drag3fg", "swipe4", "macosAccel")
-LABELS = {
-    "drag3fg": "Three-finger drag",
-    "swipe4": "Four-finger swipe",
-    "macosAccel": "macOS pointer curve",
-}
-FALLBACK_DEVICES = (
-    "apple-inc.-magic-trackpad",
-    "apple-inc.-magic-trackpad-1",
-)
-
-state_path = pathlib.Path(sys.argv[1])
-legacy_path = pathlib.Path(sys.argv[2])
-pack_path = pathlib.Path(sys.argv[3])
-hypr_path = pathlib.Path(sys.argv[4])
-accel = sys.argv[5]
-marker = sys.argv[6]
-argv = sys.argv[7:]
-
-
-def default_state():
-    return {key: True for key in KEYS}
-
-
-def load_state():
-    if state_path.exists():
-        try:
-            data = json.loads(state_path.read_text())
-        except json.JSONDecodeError:
-            data = {}
-        out = default_state()
-        for key in KEYS:
-            if key in data:
-                out[key] = bool(data[key])
-        return out
-    if legacy_path.exists():
-        raw = legacy_path.read_text().strip()
-        value = raw != "0"
-        return {key: value for key in KEYS}
-    return default_state()
-
-
-def save_state(state):
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {key: bool(state[key]) for key in KEYS}
-    state_path.write_text(json.dumps(payload, indent=2) + "\n")
-    return payload
-
-
-SAFE_DEVICE_NAME = re.compile(r"^[a-z0-9._-]+$")
-
-
-def hypr_internal_name(name):
-    # Match Hyprland deviceNameToInternalString: space/newline/comma -> '-', lower.
-    return "".join("-" if ch in " \n," else ch.lower() for ch in str(name))
-
-
-def lua_quote(name):
-    escaped = (
-        name.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
-    return f'"{escaped}"'
-
-
-def classify_trackpad_name(name):
-    if "magic-trackpad" in name or "magictrackpad" in name:
-        return 2
-    if "trackpad" in name or "touchpad" in name:
-        return 1
-    return 0
-
-
-def discover_devices():
-    preferred, weak = [], []
-    try:
-        raw = subprocess.check_output(["hyprctl", "devices", "-j"], text=True, timeout=2)
-        data = json.loads(raw)
-        for mouse in data.get("mice") or []:
-            name = hypr_internal_name(mouse.get("name") or "")
-            if not SAFE_DEVICE_NAME.fullmatch(name):
-                continue
-            rank = classify_trackpad_name(name)
-            if rank >= 2:
-                preferred.append(name)
-            elif rank == 1:
-                weak.append(name)
-    except Exception:
-        pass
-    names = set(FALLBACK_DEVICES)
-    if preferred:
-        names.update(preferred)
-    else:
-        names.update(weak)
-    return sorted(name for name in names if SAFE_DEVICE_NAME.fullmatch(name))
-
-
-def render_lua(state):
-    # Additive overlays only. Disabled features are omitted, never written as
-    # 0/false, so a reload restores whatever earlier files (Omarchy defaults,
-    # input.lua, other plugins) already set. No global hl.config({ input }).
-    header = """-- Generated by xuanping.trackpad. Additive overlays only; do not edit.
--- Disabled switches omit their keys instead of writing 0/false.
-"""
-    if not any(state[key] for key in KEYS):
-        return header + "return\n"
-
-    devices = discover_devices()
-    quoted = ", ".join(lua_quote(name) for name in devices)
-    parts = [header]
-    if state["macosAccel"]:
-        parts.append(f'local macos_accel =\n  "{accel}"\n\n')
-
-    fields = []
-    if state["macosAccel"]:
-        fields.append("    sensitivity = 0,")
-        fields.append("    accel_profile = macos_accel,")
-    if state["drag3fg"]:
-        fields.append("    drag_3fg = 1,")
-    if fields:
-        parts.append(
-            "for _, name in ipairs({ %s }) do\n  hl.device({\n    name = name,\n%s\n  })\nend\n"
-            % (quoted, "\n".join(fields))
-        )
-
-    if state["swipe4"]:
-        parts.append(
-            'hl.gesture({ fingers = 4, direction = "horizontal", action = "scroll_move" })\n'
-        )
-    return "".join(parts)
-
-
-def applied_flags(text):
-    return {
-        "drag3fg": "drag_3fg = 1" in text,
-        "swipe4": "scroll_move" in text,
-        "macosAccel": "macos_accel" in text and "accel_profile = macos_accel" in text,
-    }
-
-
-def apply(state):
-    desired = render_lua(state)
-    pack_path.parent.mkdir(parents=True, exist_ok=True)
-    current = pack_path.read_text() if pack_path.exists() else None
-    changed = current != desired
-    if changed:
-        pack_path.write_text(desired)
-    require = hypr_path.exists() and marker in hypr_path.read_text()
-    return changed, require, desired
-
-
-def parse_bool(value):
-    text = str(value).strip().lower()
-    if text in ("1", "on", "true", "yes"):
-        return True
-    if text in ("0", "off", "false", "no"):
-        return False
-    raise SystemExit(f"expected on/off, got {value!r}")
-
-
-def status_payload(state, require_present):
-    text = pack_path.read_text() if pack_path.exists() else ""
-    flags = applied_flags(text)
-    return {
-        "drag3fg": state["drag3fg"],
-        "swipe4": state["swipe4"],
-        "macosAccel": state["macosAccel"],
-        "enabled": any(state[key] for key in KEYS),
-        "applied": flags,
-        "requirePresent": require_present,
-        "stateFile": str(state_path),
-        "packLua": str(pack_path),
-    }
-
-
-cmd = argv[0] if argv else "status"
-state = load_state()
-osd_msg = None
-mutate = True
-
-if cmd == "set":
-    if len(argv) < 3:
-        raise SystemExit("usage: trackpad-pack set <drag3fg|swipe4|macosAccel> <on|off>")
-    key, value = argv[1], argv[2]
-    if key not in KEYS:
-        raise SystemExit(f"unknown feature {key}")
-    state[key] = parse_bool(value)
-    osd_msg = f"{LABELS[key]} {'on' if state[key] else 'off'}"
-elif cmd == "toggle":
-    if len(argv) < 2:
-        raise SystemExit("usage: trackpad-pack toggle <drag3fg|swipe4|macosAccel>")
-    key = argv[1]
-    if key not in KEYS:
-        raise SystemExit(f"unknown feature {key}")
-    state[key] = not state[key]
-    osd_msg = f"{LABELS[key]} {'on' if state[key] else 'off'}"
-elif cmd == "enable":
-    state = default_state()
-    osd_msg = "Trackpad feel on"
-elif cmd == "disable":
-    state = {key: False for key in KEYS}
-    osd_msg = "Trackpad feel off"
-elif cmd == "apply":
-    pass
-elif cmd == "status":
-    mutate = False
-else:
-    raise SystemExit(f"unknown command {cmd}")
-
-require_present = hypr_path.exists() and marker in hypr_path.read_text()
-changed = False
-if mutate:
-    state = save_state(state)
-    changed, require_present, _desired = apply(state)
-print(json.dumps(status_payload(state, require_present)))
-pathlib.Path(str(state_path) + ".meta").write_text(
-    json.dumps({"changed": changed, "osd": osd_msg or ""}) + "\n"
-)
-PY
-}
-
-apply_side_effects() {
-  local meta="$STATE_JSON.meta"
-  local changed=0
-  local msg=""
-  if [[ -f $meta ]]; then
-    changed=$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("changed", False)))' "$meta")
-    msg=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("osd") or "")' "$meta")
-    rm -f "$meta"
-  fi
-  if ! grep -Fq -- "$MARKER_BEGIN" "$HYPRLAND_LUA" 2>/dev/null; then
-    ensure_require
-    changed=1
-  fi
-  if (( changed )); then
-    reload_hypr
-  fi
-  if [[ -n $msg ]]; then
-    osd "$msg"
-  fi
+uninstall_hidraw() {
+  require_tty uninstall-hidraw
+  "$SUDO" /usr/bin/bash -c '
+set -euo pipefail
+dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
+old=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
+if [[ -L $dest || -L $old ]]; then
+  echo "refusing to remove a symlink" >&2
+  exit 1
+fi
+/usr/bin/rm -f -- "$dest" "$old"
+/usr/bin/udevadm control --reload-rules
+/usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
+'
+  echo "removed $UDEV_DEST"
 }
 
 cmd="${1:-}"
@@ -620,23 +167,20 @@ case "$cmd" in
   -h | --help | help)
     usage
     ;;
-  apply | status | enable | disable)
-    run_features "$cmd"
-    apply_side_effects
+  apply | set | toggle | enable | disable)
+    json=$(run_py "$@")
+    printf '%s' "$json"
+    [[ $json == *$'\n' ]] || printf '\n'
+    maybe_osd "$json"
     ;;
-  set)
-    run_features set "${2:-}" "${3:-}"
-    apply_side_effects
-    ;;
-  toggle)
-    run_features toggle "${2:-}"
-    apply_side_effects
-    ;;
-  battery)
-    print_battery
+  status | battery | notify-get | notify-set | hidraw-status | uninstall)
+    run_py "$@"
     ;;
   install-hidraw)
     install_hidraw "${2:-}"
+    ;;
+  uninstall-hidraw)
+    uninstall_hidraw
     ;;
   *)
     usage >&2

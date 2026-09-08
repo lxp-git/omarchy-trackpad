@@ -1,9 +1,9 @@
 # Magic Trackpad hidraw: seated user via logind uaccess.
 # Needed to read HID battery report 0x90 after a Bluetooth reconnect
 # (kernel power_supply often stays at 0%). Match the parent magicmouse
-# HID driver and Apple trackpad IDs (USB 05ac:0265 / 05ac:0324 / 05ac:030e,
-# BT 004c:0265 / 004c:0324) or a Trackpad product/name string.
-# Do not match Magic Mouse.
+# HID driver and Apple trackpad IDs only (USB 05ac:0265 / 05ac:0324 /
+# 05ac:030e, BT 004c:0265 / 004c:0324 / 004c:030e). Do not match Magic Mouse
+# or a device that only has "Trackpad" in a self-reported name string.
 #
 # Filename must sort before 73-seat-late.rules so TAG+="uaccess" is applied.
 # Bluetooth hidraw sits under /devices/virtual/misc/uhid and has no seat;
@@ -18,5 +18,3 @@ ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:05A
 ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0265", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
 ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
 ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
-ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{name}=="*Trackpad*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
-ACTION!="remove", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{product}=="*Trackpad*", MODE="0660", TAG+="uaccess", ENV{ID_SEAT}="seat0"
