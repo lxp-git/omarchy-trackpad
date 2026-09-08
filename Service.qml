@@ -55,6 +55,12 @@ Item {
     applyProc.running = true
   }
 
+  function ensureHidraw() {
+    if (!helper || hidrawProc.running) return
+    hidrawProc.command = [helper, "install-hidraw", "--if-needed"]
+    hidrawProc.running = true
+  }
+
   function refreshBattery() {
     if (!helper || batteryProc.running) return
     batteryProc.command = [helper, "battery"]
@@ -121,6 +127,7 @@ Item {
   }
 
   Process { id: applyProc }
+  Process { id: hidrawProc }
   Process { id: notifyProc }
   Process {
     id: mkdirProc
@@ -147,6 +154,7 @@ Item {
 
   Component.onCompleted: {
     root.applyPack()
+    root.ensureHidraw()
     if (notifyDir && !mkdirProc.running) {
       mkdirProc.command = ["mkdir", "-p", notifyDir]
       mkdirProc.running = true

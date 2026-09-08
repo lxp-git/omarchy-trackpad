@@ -24,7 +24,7 @@ Usage: trackpad-pack <command>
   set <drag3fg|swipe4|macosAccel> <on|off>
   toggle <drag3fg|swipe4|macosAccel>
   battery                       Print HID trackpad battery JSON
-  install-hidraw                udev rule (uaccess) so Bluetooth reconnects can read report 0x90
+  install-hidraw [--if-needed]  udev rule (uaccess) so Bluetooth reconnects can read report 0x90
 EOF
 }
 
@@ -346,14 +346,22 @@ PY
 }
 
 install_hidraw() {
-  local rule_src dest
+  local rule_src dest old if_needed=0
   rule_src="$(cd "$(dirname "$0")/.." && pwd)/udev/70-xuanping-trackpad-hidraw.rules"
   dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
+  old=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
+  [[ ${1:-} == --if-needed ]] && if_needed=1
   [[ -f $rule_src ]] || { echo "missing udev rule: $rule_src" >&2; return 1; }
-  pkexec /usr/bin/install -m 644 "$rule_src" "$dest"
-  pkexec /usr/bin/rm -f /etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
-  pkexec /usr/bin/udevadm control --reload-rules
-  pkexec /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
+  if [[ $if_needed -eq 1 && -f $dest && ! -e $old ]] && cmp -s "$rule_src" "$dest"; then
+    return 0
+  fi
+  pkexec /usr/bin/bash -c 'set -euo pipefail
+src=$1 dest=$2 old=$3
+/usr/bin/install -m 644 "$src" "$dest"
+/usr/bin/rm -f "$old"
+/usr/bin/udevadm control --reload-rules
+/usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
+' bash "$rule_src" "$dest" "$old"
   echo "installed $dest"
 }
 
@@ -628,7 +636,7 @@ case "$cmd" in
     print_battery
     ;;
   install-hidraw)
-    install_hidraw
+    install_hidraw "${2:-}"
     ;;
   *)
     usage >&2

@@ -16,6 +16,8 @@ This repository is the source. Omarchy clones it to
 `omarchy plugin update xuanping.trackpad`.
 
 The service applies the Hyprland features as soon as the plugin is enabled.
+The first time it starts it also installs the hidraw udev rule (one polkit
+password prompt). Later starts skip that if the rule is already in place.
 
 ## Use
 
@@ -33,20 +35,10 @@ discharge — the latch lives in
 live reading above 20%, clears it.
 
 After a Bluetooth reconnect the kernel often reports **0%**. The plugin then
-reads HID report `0x90` from hidraw. That needs a one-time udev rule:
-
-```bash
-~/.config/omarchy/plugins/xuanping.trackpad/bin/trackpad-pack install-hidraw
-```
-
-The rule is `70-xuanping-trackpad-hidraw.rules` so it runs before
-`73-seat-late.rules`. It tags only Magic Trackpad hidraw with `uaccess` and
-sets `ID_SEAT=seat0` (Bluetooth uhid has no seat, so logind otherwise skips
-the ACL). It does not add the user to the `input` group.
-
-Until that rule is in place, a 0% kernel reading after a Bluetooth reset
-is treated as unknown and the last good percentage is kept (stale). The
-icon stays visible while the trackpad is connected.
+reads HID report `0x90` from hidraw, using `70-xuanping-trackpad-hidraw.rules`
+(`uaccess` + `ID_SEAT=seat0`, no `input` group). Until that rule is in place,
+a 0% kernel reading is treated as unknown and the last good percentage is
+kept (stale). The icon stays visible while the trackpad is connected.
 
 ## Switches
 
