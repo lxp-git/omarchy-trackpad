@@ -24,7 +24,7 @@ Usage: trackpad-pack <command>
   set <drag3fg|swipe4|macosAccel> <on|off>
   toggle <drag3fg|swipe4|macosAccel>
   battery                       Print HID trackpad battery JSON
-  install-hidraw                udev rule (group input) so Bluetooth reconnects can read report 0x90
+  install-hidraw                udev rule (uaccess) so Bluetooth reconnects can read report 0x90
 EOF
 }
 
@@ -346,19 +346,14 @@ PY
 }
 
 install_hidraw() {
-  local rule_src dest user
-  rule_src="$(cd "$(dirname "$0")/.." && pwd)/udev/99-xuanping-trackpad-hidraw.rules"
-  dest=/etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
-  user="$(id -un)"
+  local rule_src dest
+  rule_src="$(cd "$(dirname "$0")/.." && pwd)/udev/70-xuanping-trackpad-hidraw.rules"
+  dest=/etc/udev/rules.d/70-xuanping-trackpad-hidraw.rules
   [[ -f $rule_src ]] || { echo "missing udev rule: $rule_src" >&2; return 1; }
   pkexec /usr/bin/install -m 644 "$rule_src" "$dest"
+  pkexec /usr/bin/rm -f /etc/udev/rules.d/99-xuanping-trackpad-hidraw.rules
   pkexec /usr/bin/udevadm control --reload-rules
   pkexec /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
-  if [[ $user =~ ^[-_.a-zA-Z0-9]+$ ]] && ! id -nG "$user" | grep -qw input; then
-    pkexec /usr/bin/usermod -aG input "$user"
-    echo "installed $dest (added $user to group input; log in again)"
-    return 0
-  fi
   echo "installed $dest"
 }
 
