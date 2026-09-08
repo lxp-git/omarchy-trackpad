@@ -39,8 +39,8 @@ reads HID report `0x90` from hidraw. That needs a one-time udev rule:
 ~/.config/omarchy/plugins/xuanping.trackpad/bin/trackpad-pack install-hidraw
 ```
 
-The rule grants the seated user (`TAG+="uaccess"`) read/write on Magic
-Trackpad hidraw nodes only. It does not add the user to the `input` group.
+The rule sets those hidraw nodes to `root:input` mode `0660`. The installer
+adds your user to the `input` group if needed; log in again afterwards.
 
 Until that rule is in place, a 0% kernel reading after a Bluetooth reset
 is treated as unknown and the last good percentage is kept (stale). The

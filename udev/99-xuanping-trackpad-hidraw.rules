@@ -1,18 +1,18 @@
-# Allow the seated user to read Magic Trackpad HID battery report 0x90.
-# Kernel power_supply often stays at 0% after a Bluetooth reconnect.
-# Match hidraw via the parent magicmouse HID driver and Apple trackpad IDs
-# (USB 05ac:0265 / 05ac:0324 / 05ac:030e, BT 004c:0265 / 004c:0324) or a
-# Trackpad product/name string. Do not match Magic Mouse. Access is the
-# logind ACL only (no input group).
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0265.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:030E.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0324.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0265.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:030E.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0324.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:05AC:030E.*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0265", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{name}=="*Trackpad*", MODE="0660", TAG+="uaccess"
-ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{product}=="*Trackpad*", MODE="0660", TAG+="uaccess"
+# Magic Trackpad hidraw: group input, mode 0660.
+# Needed to read HID battery report 0x90 after a Bluetooth reconnect
+# (kernel power_supply often stays at 0%). Match the parent magicmouse
+# HID driver and Apple trackpad IDs (USB 05ac:0265 / 05ac:0324 / 05ac:030e,
+# BT 004c:0265 / 004c:0324) or a Trackpad product/name string.
+# Do not match Magic Mouse.
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0265.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:030E.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0003:05AC:0324.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0265.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:030E.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:004C:0324.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", KERNELS=="0005:05AC:030E.*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0265", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="030e", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{idVendor}=="05ac", ATTRS{idProduct}=="0324", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{name}=="*Trackpad*", MODE="0660", GROUP="input"
+ACTION=="add", SUBSYSTEM=="hidraw", DRIVERS=="magicmouse", ATTRS{product}=="*Trackpad*", MODE="0660", GROUP="input"

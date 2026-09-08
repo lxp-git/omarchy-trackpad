@@ -24,7 +24,7 @@ Usage: trackpad-pack <command>
   set <drag3fg|swipe4|macosAccel> <on|off>
   toggle <drag3fg|swipe4|macosAccel>
   battery                       Print HID trackpad battery JSON
-  install-hidraw                udev rule so Bluetooth reconnects can read report 0x90
+  install-hidraw                udev rule (group input) so Bluetooth reconnects can read report 0x90
 EOF
 }
 
@@ -354,59 +354,11 @@ install_hidraw() {
   pkexec /usr/bin/install -m 644 "$rule_src" "$dest"
   pkexec /usr/bin/udevadm control --reload-rules
   pkexec /usr/bin/udevadm trigger --action=add --subsystem-match=hidraw
-  if [[ ! $user =~ ^[-_.a-zA-Z0-9]+$ ]]; then
-    echo "installed $dest (skipped setfacl: unsafe username)" >&2
-    echo "installed $dest"
+  if [[ $user =~ ^[-_.a-zA-Z0-9]+$ ]] && ! id -nG "$user" | grep -qw input; then
+    pkexec /usr/bin/usermod -aG input "$user"
+    echo "installed $dest (added $user to group input; log in again)"
     return 0
   fi
-  local dev
-  while IFS= read -r dev; do
-    [[ -n $dev && -e $dev ]] || continue
-    pkexec /usr/bin/setfacl -m "u:${user}:rw" "$dev" || true
-  done < <(python3 - <<'PY'
-import pathlib
-
-APPLE_TRACKPAD_VP = {
-    (0x05AC, 0x0265), (0x05AC, 0x0324), (0x05AC, 0x030E),
-    (0x004C, 0x0265), (0x004C, 0x0324), (0x004C, 0x030E),
-}
-
-def read_uevent(path):
-    data = {}
-    try:
-        for line in path.read_text().splitlines():
-            if "=" in line:
-                key, value = line.split("=", 1)
-                data[key] = value
-    except OSError:
-        return {}
-    return data
-
-def parse_hid_id(hid_id):
-    parts = (hid_id or "").strip().split(":")
-    if len(parts) != 3:
-        return None
-    try:
-        return tuple(int(part, 16) for part in parts)
-    except ValueError:
-        return None
-
-def is_trackpad(data):
-    parsed = parse_hid_id(data.get("HID_ID", ""))
-    if parsed and (parsed[1], parsed[2]) in APPLE_TRACKPAD_VP:
-        return True
-    name = data.get("HID_NAME", "").lower()
-    return "trackpad" in name or "touchpad" in name
-
-root = pathlib.Path("/sys/class/hidraw")
-if not root.exists():
-    raise SystemExit(0)
-for entry in sorted(root.iterdir()):
-    data = read_uevent(entry / "device" / "uevent")
-    if is_trackpad(data):
-        print(f"/dev/{entry.name}")
-PY
-)
   echo "installed $dest"
 }
 
