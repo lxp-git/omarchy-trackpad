@@ -28,11 +28,18 @@ Item {
   }
 
   property bool notifyLoaded: false
+  property bool packEnsured: false
 
   function applyPack() {
     if (!helper || applyProc.running) return
     applyProc.command = [helper, "apply"]
     applyProc.running = true
+  }
+
+  function refreshStatus() {
+    if (!helper || statusProc.running) return
+    statusProc.command = [helper, "status"]
+    statusProc.running = true
   }
 
   function refreshBattery() {
@@ -104,10 +111,21 @@ Item {
   }
 
   HelperProcess {
+    id: statusProc
+    extraEnv: root.helperEnv
+    maxBytes: 8192
+    onAccepted: function(text) {
+      if (root.packEnsured) return
+      root.packEnsured = true
+      if (!Model.parseStatus(text).requirePresent) root.applyPack()
+    }
+  }
+
+  HelperProcess {
     id: notifyGetProc
     extraEnv: root.helperEnv
     maxBytes: 1024
-    onAccepted: root.hydrateNotify(text)
+    onAccepted: function(text) { root.hydrateNotify(text) }
   }
 
   HelperProcess {
@@ -124,7 +142,7 @@ Item {
     id: batteryProc
     extraEnv: root.helperEnv
     maxBytes: 4096
-    onAccepted: {
+    onAccepted: function(text) {
       root.battery = Model.parseBattery(text)
       root.checkBattery()
     }
@@ -139,7 +157,7 @@ Item {
   }
 
   Component.onCompleted: {
-    root.applyPack()
+    root.refreshStatus()
     root.loadNotify()
   }
 }

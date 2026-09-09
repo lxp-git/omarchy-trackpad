@@ -10,11 +10,17 @@ function helperPathFromUrl(url) {
 
 function safeHelperPath(path) {
   var text = String(path || "")
+  var suffix = "/bin/trackpad-pack"
   if (text.charAt(0) !== "/") return ""
-  if (text.length < 18 || text.length > 512) return ""
-  if (!/^[A-Za-z0-9._/+\-]+$/.test(text)) return ""
+  if (text.length < suffix.length || text.length > 512) return ""
   if (text.indexOf("/../") >= 0 || text.indexOf("/..") === text.length - 3) return ""
-  if (text.substring(text.length - 17) !== "/bin/trackpad-pack") return ""
+  if (text.substring(text.length - suffix.length) !== suffix) return ""
+  for (var i = 0; i < text.length; i++) {
+    var c = text.charAt(i)
+    var ok = (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9")
+      || c === "." || c === "_" || c === "/" || c === "-"
+    if (!ok) return ""
+  }
   return text
 }
 
@@ -142,12 +148,22 @@ function icon() {
 }
 
 function defaultFeatures() {
-  return { drag3fg: true, swipe4: true, macosAccel: true }
+  return { drag3fg: true, swipe4: true, macosAccel: true, scrollFactor: 0.3 }
 }
 
 function flagValue(parsed, key) {
   if (!parsed || parsed[key] === undefined || parsed[key] === null) return true
   return parsed[key] === true
+}
+
+function parseScrollFactor(value) {
+  var n = Number(value)
+  if (!isFinite(n) || n < 0.1 || n > 2) return 0.3
+  return Math.round(n * 100) / 100
+}
+
+function formatScrollFactor(value) {
+  return parseScrollFactor(value).toFixed(2)
 }
 
 function parseStatus(raw) {
@@ -160,6 +176,7 @@ function parseStatus(raw) {
       drag3fg: flagValue(parsed, "drag3fg"),
       swipe4: flagValue(parsed, "swipe4"),
       macosAccel: flagValue(parsed, "macosAccel"),
+      scrollFactor: parseScrollFactor(parsed.scrollFactor),
       enabled: parsed.enabled !== false,
       requirePresent: parsed.requirePresent === true
     }

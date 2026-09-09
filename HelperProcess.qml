@@ -2,65 +2,73 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-Process {
-  id: proc
+// Process is PostReloadHook, not Item: Timers must be siblings of Process.
+Item {
+  id: root
+  width: 0
+  height: 0
 
   property int maxBytes: 8192
   property int deadlineMs: 20000
   property string buf: ""
   property var extraEnv: ({})
+  property alias command: helperProc.command
+  property alias running: helperProc.running
 
   signal accepted(string text)
   signal finished(int code)
 
-  clearEnvironment: true
-  environment: proc.extraEnv
+  Process {
+    id: helperProc
+    clearEnvironment: true
+    environment: root.extraEnv
 
-  stdout: SplitParser {
-    splitMarker: ""
-    onRead: function(chunk) {
-      proc.buf += chunk
-      if (proc.buf.length > proc.maxBytes) {
-        proc.signal(15)
-        killTimer.start()
-        proc.buf = ""
+    stdout: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        root.buf += chunk
+        if (root.buf.length > root.maxBytes) {
+          helperProc.signal(15)
+          killTimer.start()
+          root.buf = ""
+        }
       }
     }
-  }
 
-  stderr: SplitParser {
-    splitMarker: ""
-    onRead: function(chunk) {
-      if (proc.buf.length > proc.maxBytes) {
-        proc.signal(15)
-        killTimer.start()
+    stderr: SplitParser {
+      splitMarker: ""
+      onRead: function(chunk) {
+        if (root.buf.length > root.maxBytes) {
+          helperProc.signal(15)
+          killTimer.start()
+        }
       }
     }
-  }
 
-  onRunningChanged: {
-    if (running) {
-      proc.buf = ""
-      deadline.restart()
-    } else {
+    onRunningChanged: {
+      if (running) {
+        root.buf = ""
+        deadline.restart()
+      } else {
+        deadline.stop()
+      }
+    }
+
+    onExited: function(code) {
       deadline.stop()
+      killTimer.stop()
+      if (code === 0 && root.buf.length)
+        root.accepted(root.buf)
+      root.buf = ""
+      root.finished(code)
     }
-  }
-
-  onExited: function(code) {
-    deadline.stop()
-    killTimer.stop()
-    if (code === 0 && proc.buf.length)
-      proc.accepted(proc.buf)
-    proc.buf = ""
-    proc.finished(code)
   }
 
   Timer {
     id: deadline
-    interval: proc.deadlineMs
+    interval: root.deadlineMs
     onTriggered: {
-      proc.signal(15)
+      helperProc.signal(15)
       killTimer.start()
     }
   }
@@ -68,8 +76,8 @@ Process {
   Timer {
     id: killTimer
     interval: 2000
-    onTriggered: proc.signal(9)
+    onTriggered: helperProc.signal(9)
   }
 
-  Component.onDestruction: if (proc.running) proc.signal(15)
+  Component.onDestruction: if (helperProc.running) helperProc.signal(15)
 }

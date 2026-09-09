@@ -13,14 +13,19 @@ omarchy plugin add https://github.com/lxp-git/omarchy-trackpad.git --enable
 omarchy bar move xuanping.trackpad --section right --before omarchy.power
 ```
 
-Enabling the plugin is the consent to write a **marked** overlay:
+Enabling the plugin is the consent to write a **marked** overlay. The
+service mounts only while the plugin is enabled; on load it runs read-only
+`status` and writes Hyprland config only when the marked block is missing
+(first enable, or after a Hyprland config refresh). A later shell restart
+does not rewrite `hyprland.lua`.
 
 - `~/.config/hypr/xuanping-trackpad.lua` (generated, plugin-owned)
 - a `-- BEGIN xuanping.trackpad` / `-- END xuanping.trackpad` block in
   `~/.config/hypr/hyprland.lua` (the existing file is copied to
   `~/.config/hypr/hyprland.lua.xuanping-trackpad.bak` before the first edit)
 
-`status` is read-only and does not edit Hyprland config.
+`status` is read-only and does not edit Hyprland config. Panel switches
+rewrite only the generated overlay.
 
 ## Hidraw access (optional)
 
@@ -68,14 +73,18 @@ Overlays are scoped to Magic Trackpad device names; they do not set global
 `input { }`. Four-finger swipe is a compositor gesture, so it is global, but
 only registered while that switch is on.
 
+While any feel switch is on, the overlay also sets `natural_scroll = true`
+and `scroll_factor` on those Trackpad devices. Scroll speed defaults to
+**0.3** (the previous Magic Trackpad value) and is a slider in the panel.
+Omarchy's global touchpad default is traditional scrolling at 0.4.
+Clickfinger still belongs in `~/.config/hypr/input.lua`.
+
 | Switch | What it does |
 |---|---|
-| Three-finger drag | `hl.device({ drag_3fg = 1 })` on the Trackpad |
+| Three-finger drag | `drag_3fg = 1` and `tap_and_drag = false` on the Trackpad |
 | Four-finger swipe | four-finger `scroll_move` gesture |
 | macOS pointer curve | custom accel on the Trackpad only |
-
-Natural scroll, clickfinger, and scroll speed belong in `~/.config/hypr/input.lua`,
-not in this overlay.
+| Scroll speed | `scroll_factor` on the Trackpad, default 0.3 |
 
 ```bash
 omarchy-shell xuanping.trackpad toggleDrag

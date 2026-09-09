@@ -89,6 +89,8 @@ Panel {
   property bool drag3fg: true
   property bool swipe4: true
   property bool macosAccel: true
+  property real scrollFactor: 0.3
+  property real pendingScroll: -1
   property bool packBusy: false
   property bool cursorActive: false
   property int feelIndex: 0
@@ -136,6 +138,7 @@ Panel {
     root.drag3fg = parsed.drag3fg
     root.swipe4 = parsed.swipe4
     root.macosAccel = parsed.macosAccel
+    root.scrollFactor = parsed.scrollFactor
   }
 
   function applyBattery(parsed) {
@@ -189,6 +192,20 @@ Panel {
     packProc.running = true
   }
 
+  function setScrollFactor(v) {
+    var n = Model.parseScrollFactor(v)
+    root.scrollFactor = n
+    if (!helper) return
+    if (packProc.running) {
+      root.pendingScroll = n
+      return
+    }
+    root.pendingScroll = -1
+    packBusy = true
+    packProc.command = [helper, "set", "scrollFactor", Model.formatScrollFactor(n)]
+    packProc.running = true
+  }
+
   function togglePercentage() {
     root.settings = Object.assign({}, root.settings, { showPercentage: !root.showPercentage })
     if (root.bar && root.bar.shell) root.bar.shell.updateEntryInline(root.moduleName, root.settings)
@@ -216,29 +233,36 @@ Panel {
     id: statusProc
     extraEnv: root.helperEnv
     maxBytes: 8192
-    onAccepted: root.applyStatus(Model.parseStatus(text))
+    onAccepted: function(text) { root.applyStatus(Model.parseStatus(text)) }
   }
 
   HelperProcess {
     id: batteryProc
     extraEnv: root.helperEnv
     maxBytes: 4096
-    onAccepted: root.applyBattery(Model.parseBattery(text))
+    onAccepted: function(text) { root.applyBattery(Model.parseBattery(text)) }
   }
 
   HelperProcess {
     id: packProc
     extraEnv: root.helperEnv
     maxBytes: 8192
-    onAccepted: root.applyStatus(Model.parseStatus(text))
-    onFinished: root.packBusy = false
+    onAccepted: function(text) { root.applyStatus(Model.parseStatus(text)) }
+    onFinished: function() {
+      root.packBusy = false
+      if (root.pendingScroll >= 0) {
+        var n = root.pendingScroll
+        root.pendingScroll = -1
+        root.setScrollFactor(n)
+      }
+    }
   }
 
   HelperProcess {
     id: hidrawStatusProc
     extraEnv: root.helperEnv
     maxBytes: 1024
-    onAccepted: {
+    onAccepted: function(text) {
       var s = Model.parseHidraw(text)
       root.hidrawRuleInstalled = s.ruleInstalled
       root.hidrawReadable = s.readable
@@ -481,7 +505,7 @@ Panel {
           Toggle {
             width: parent.width
             label: "Three-finger drag"
-            description: "Click-and-drag with three fingers."
+            description: "Drag with three fingers. Turns off double-tap drag."
             foreground: root.foreground
             fontFamily: root.fontFamily
             checked: root.drag3fg
@@ -512,6 +536,54 @@ Panel {
             hasCursor: root.cursorActive && root.feelIndex === 2
             onHovered: function(h) { if (h) { root.cursorActive = true; root.feelIndex = 2 } }
             onClicked: root.toggleFeature("macosAccel")
+          }
+
+          Item {
+            width: parent.width
+            implicitHeight: Style.space(18)
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Scroll speed"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: Model.formatScrollFactor(scrollSlider.dragging ? scrollSlider.liveValue : root.scrollFactor)
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            wrapMode: Text.WordWrap
+            text: "Two-finger scroll on the Trackpad. Default 0.3."
+            color: root.foreground
+            opacity: 0.7
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          PanelSlider {
+            id: scrollSlider
+            width: parent.width
+            bar: root.bar
+            minimum: 0.1
+            maximum: 2.0
+            step: 0.05
+            value: root.scrollFactor
+            onMoved: function(v) { root.scrollFactor = Model.parseScrollFactor(v) }
+            onReleased: function(v) { root.setScrollFactor(v) }
           }
         }
       }
