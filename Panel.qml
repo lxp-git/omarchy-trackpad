@@ -72,6 +72,8 @@ Panel {
     return heldBattery || sysBattery
   }
   readonly property bool devicePresent: !!(battery && battery.present) || held.present
+  // Only a laptop touchpad is present: no battery, the panel is just the feel switches.
+  readonly property bool builtin: !!(battery && battery.source === "builtin")
   readonly property int percentage: battery && isFinite(battery.percentage) ? battery.percentage : -1
   readonly property real batteryFraction: percentage < 0 ? 0 : percentage / 100
   readonly property bool charging: !!(battery && battery.status === "Charging")
@@ -100,6 +102,7 @@ Panel {
   readonly property string deviceName: Model.displayName({ model: battery && battery.model ? battery.model : "" })
   readonly property string heroStatus: {
     if (!devicePresent) return "Disconnected"
+    if (builtin) return "Built-in"
     if (stale) return "Last reading"
     if (percentage < 0) return "Waiting"
     if (battery && battery.status === "Full") return "Charged"
@@ -142,6 +145,13 @@ Panel {
   }
 
   function applyBattery(parsed) {
+    if (parsed && parsed.present && parsed.source === "builtin") {
+      // The Magic Trackpad is gone; do not paint its held percent on the laptop pad.
+      root.absentStreak = 0
+      held.present = false
+      root.sysBattery = parsed
+      return
+    }
     if (parsed && parsed.present) {
       var pct = parsed.percentage
       var stale = !!parsed.stale
@@ -424,8 +434,9 @@ Panel {
 
           Text {
             id: heroPercent
+            visible: !root.builtin
             textFormat: Text.PlainText
-            text: root.percentage >= 0 ? (root.percentage + "%") : "—"
+            text: root.builtin ? "" : (root.percentage >= 0 ? (root.percentage + "%") : "—")
             color: root.lowBattery ? root.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.displayLarge
@@ -436,6 +447,7 @@ Panel {
         }
 
         Item {
+          visible: !root.builtin
           width: parent.width
           implicitHeight: Style.space(8)
 
@@ -467,9 +479,13 @@ Panel {
           }
         }
 
-        PanelSeparator { foreground: root.foreground }
+        PanelSeparator {
+          visible: !root.builtin
+          foreground: root.foreground
+        }
 
         Toggle {
+          visible: !root.builtin
           width: parent.width
           label: "Show percentage"
           description: "Battery percent after the bar icon. Right-click also toggles this."
@@ -480,7 +496,7 @@ Panel {
         }
 
         Toggle {
-          visible: !root.hidrawRuleInstalled && !root.hidrawReadable
+          visible: !root.builtin && !root.hidrawRuleInstalled && !root.hidrawReadable
           width: parent.width
           label: "Grant hidraw access"
           description: "Opens a terminal for one sudo prompt. Needed so battery stays correct after a Bluetooth reconnect. Magic Trackpad only; no input group."
@@ -567,7 +583,7 @@ Panel {
             width: parent.width
             textFormat: Text.PlainText
             wrapMode: Text.WordWrap
-            text: "Two-finger scroll on the Trackpad. Default 0.3."
+            text: "Two-finger scroll on the Magic Trackpad and built-in touchpad. Default 0.3."
             color: root.foreground
             opacity: 0.7
             font.family: root.fontFamily

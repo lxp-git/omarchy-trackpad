@@ -2,7 +2,8 @@
 
 Magic Trackpad battery in the bar. Enabling the plugin turns on three
 feel switches by default: three-finger drag, four-finger workspace pan,
-and the macOS pointer curve.
+and the macOS pointer curve. The feel switches cover a Magic Trackpad
+and a laptop's built-in touchpad.
 
 This plugin does not use the network.
 
@@ -55,6 +56,9 @@ good percentage is kept (stale).
 - **Middle click** — refresh status
 
 The icon hides when the trackpad is disconnected. Feel settings stay applied.
+On a laptop the built-in touchpad keeps the icon up with no percentage, and
+the panel shows only the feel switches. A Magic Trackpad, when connected,
+takes over the icon with its battery.
 
 Low-battery notices fire once at **20%** and once at **10%**. A Bluetooth
 reset, a kernel 0% reading, or a plugin reload does not count as a new
@@ -69,12 +73,17 @@ rolled back.
 
 The generated file is **additive**. A switch that is off omits its keys
 instead of writing `0`/`false`, so other programs' earlier settings remain.
-Overlays are scoped to Magic Trackpad device names; they do not set global
-`input { }`. Four-finger swipe is a compositor gesture, so it is global, but
-only registered while that switch is on.
+Overlays are scoped to Magic Trackpad device names and to built-in
+touchpads (udev `ID_INPUT_TOUCHPAD=1` with
+`ID_INPUT_TOUCHPAD_INTEGRATION=internal`); they do not set global
+`input { }`, so a USB mouse or another external touchpad is left alone.
+Four-finger swipe is a compositor gesture, so it is global, but only
+registered while that switch is on. If the overlay predates a built-in
+touchpad (an upgrade from 1.2), the service rewrites it the next time the
+shell starts, or as soon as any switch changes.
 
 While any feel switch is on, the overlay also sets `natural_scroll = true`
-and `scroll_factor` on those Trackpad devices. Scroll speed defaults to
+and `scroll_factor` on those devices. Scroll speed defaults to
 **0.3** (the previous Magic Trackpad value) and is a slider in the panel.
 Omarchy's global touchpad default is traditional scrolling at 0.4.
 Clickfinger still belongs in `~/.config/hypr/input.lua`.
