@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -156,7 +157,128 @@ class Helpers(unittest.TestCase):
         body = text[start : text.find("}", start)]
         self.assertIn("root.refreshStatus()", body)
         self.assertNotIn("applyPack", body)
-        self.assertIn("if (!Model.parseStatus(text).requirePresent) root.applyPack()", text)
+        self.assertIn("if (!status.requirePresent || status.missingDevices) root.applyPack()", text)
+
+
+BUILTIN = "uniw0001:00-093a:0255-touchpad"
+HYPR_LAPTOP = {
+    "mice": [
+        {"name": "uniw0001:00-093a:0255-mouse"},
+        {"name": BUILTIN},
+    ]
+}
+
+
+class Patched(unittest.TestCase):
+    def patch(self, **funcs):
+        for name, func in funcs.items():
+            orig = getattr(trackpad, name)
+            self.addCleanup(setattr, trackpad, name, orig)
+            setattr(trackpad, name, func)
+
+
+class BuiltinTouchpad(Patched):
+    def test_device_names_allow_builtin_shapes(self):
+        self.assertTrue(trackpad.SAFE_DEVICE_NAME.fullmatch(BUILTIN))
+        self.assertTrue(trackpad.SAFE_DEVICE_NAME.fullmatch("synps/2-synaptics-touchpad"))
+        self.assertIsNone(trackpad.SAFE_DEVICE_NAME.fullmatch('a"b'))
+        self.assertIsNone(trackpad.SAFE_DEVICE_NAME.fullmatch("a\\b"))
+        self.assertEqual(
+            trackpad.hypr_internal_name("UNIW0001:00 093A:0255 Touchpad"), BUILTIN
+        )
+
+    def test_udev_db_and_integration(self):
+        props = trackpad.parse_udev_db(
+            "S:input/by-path/x\nE:ID_INPUT=1\nE:ID_INPUT_TOUCHPAD=1\n"
+            "E:ID_BUS=i2c\nE:ID_INPUT_TOUCHPAD_INTEGRATION=internal\nV:1\n"
+        )
+        self.assertEqual(props["ID_INPUT_TOUCHPAD"], "1")
+        self.assertNotIn("S", props)
+        self.assertEqual(trackpad.touchpad_integration(props), "internal")
+        self.assertEqual(
+            trackpad.touchpad_integration({"ID_INPUT_TOUCHPAD_INTEGRATION": "external"}), "external"
+        )
+        self.assertEqual(trackpad.touchpad_integration({"ID_INTEGRATION": "internal"}), "internal")
+        self.assertEqual(trackpad.touchpad_integration({"ID_BUS": "bluetooth"}), "external")
+        self.assertEqual(trackpad.touchpad_integration({"ID_BUS": "usb"}), "external")
+        self.assertEqual(trackpad.touchpad_integration({"ID_BUS": "i2c"}), "internal")
+
+    def test_input_touchpads_is_bounded_list(self):
+        pads = trackpad.input_touchpads()
+        self.assertIsInstance(pads, list)
+        for pad in pads:
+            self.assertTrue(trackpad.SAFE_DEVICE_NAME.fullmatch(pad["hypr"]))
+
+    def test_discover_adds_internal_touchpad_only(self):
+        self.patch(
+            hypr_devices_json=lambda: HYPR_LAPTOP,
+            input_touchpads=lambda: [
+                {"name": "UNIW0001:00 093A:0255 Touchpad", "hypr": BUILTIN, "internal": True},
+                {"name": "Logitech T650", "hypr": "logitech-t650", "internal": False},
+            ],
+        )
+        devices = trackpad.discover_devices()
+        self.assertIn(BUILTIN, devices)
+        self.assertIn("apple-inc.-magic-trackpad", devices)
+        self.assertNotIn("uniw0001:00-093a:0255-mouse", devices)
+        self.assertNotIn("logitech-t650", devices)
+        lua = trackpad.render_lua(trackpad.default_state())
+        self.assertIn('"%s"' % BUILTIN, lua)
+        self.assertIn("drag_3fg = 1", lua)
+
+    def test_desktop_without_builtin_is_unchanged(self):
+        self.patch(hypr_devices_json=lambda: {}, input_touchpads=lambda: [])
+        self.assertEqual(list(trackpad.discover_devices()), sorted(trackpad.FALLBACK_DEVICES))
+
+
+class BuiltinBattery(Patched):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.patch(
+            state_dirfd=lambda: os.open(self.tmp.name, os.O_RDONLY | os.O_DIRECTORY),
+            sysfs_battery=lambda: None,
+            hidraw_battery=lambda: None,
+            hidraw_devices=lambda: [],
+        )
+
+    def test_builtin_only_is_present_without_battery(self):
+        self.patch(
+            hypr_devices_json=lambda: HYPR_LAPTOP,
+            input_touchpads=lambda: [{"name": "x", "hypr": BUILTIN, "internal": True}],
+        )
+        out = trackpad.battery_payload()
+        self.assertTrue(out["present"])
+        self.assertEqual(out["source"], "builtin")
+        self.assertEqual(out["percentage"], -1)
+        self.assertFalse(out["stale"])
+        self.assertFalse(Path(self.tmp.name, "battery-cache.json").exists())
+
+    def test_builtin_trackpad_name_does_not_fake_magic_trackpad(self):
+        name = "apple-internal-keyboard-/-trackpad"
+        self.patch(
+            hypr_devices_json=lambda: {"mice": [{"name": name}]},
+            input_touchpads=lambda: [{"name": "x", "hypr": name, "internal": True}],
+        )
+        self.assertEqual(trackpad.battery_payload()["source"], "builtin")
+
+    def test_recent_magic_trackpad_cache_wins_over_builtin(self):
+        Path(self.tmp.name, "battery-cache.json").write_text(
+            '{"percentage": 64, "status": "Discharging", "model": "Magic Trackpad", "savedAt": %f}\n'
+            % time.time()
+        )
+        os.chmod(Path(self.tmp.name, "battery-cache.json"), 0o600)
+        self.patch(
+            hypr_devices_json=lambda: HYPR_LAPTOP,
+            input_touchpads=lambda: [{"name": "x", "hypr": BUILTIN, "internal": True}],
+        )
+        out = trackpad.battery_payload()
+        self.assertEqual(out["source"], "cache")
+        self.assertEqual(out["percentage"], 64)
+
+    def test_nothing_present_on_desktop_without_trackpad(self):
+        self.patch(hypr_devices_json=lambda: {}, input_touchpads=lambda: [])
+        self.assertFalse(trackpad.battery_payload()["present"])
 
 
 if __name__ == "__main__":

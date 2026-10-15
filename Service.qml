@@ -117,7 +117,8 @@ Item {
     onAccepted: function(text) {
       if (root.packEnsured) return
       root.packEnsured = true
-      if (!Model.parseStatus(text).requirePresent) root.applyPack()
+      var status = Model.parseStatus(text)
+      if (!status.requirePresent || status.missingDevices) root.applyPack()
     }
   }
 

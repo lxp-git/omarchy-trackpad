@@ -178,11 +178,13 @@ function parseStatus(raw) {
       macosAccel: flagValue(parsed, "macosAccel"),
       scrollFactor: parseScrollFactor(parsed.scrollFactor),
       enabled: parsed.enabled !== false,
-      requirePresent: parsed.requirePresent === true
+      requirePresent: parsed.requirePresent === true,
+      missingDevices: parsed.missingDevices === true
     }
   } catch (e) {
     fallback.enabled = true
     fallback.requirePresent = false
+    fallback.missingDevices = false
     return fallback
   }
 }
