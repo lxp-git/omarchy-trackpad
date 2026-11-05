@@ -309,38 +309,54 @@ Panel {
     bar: root.bar
     active: root.lowBattery
     dimmed: !root.anyFeel
-    opticalSize: Style.bar.iconCanvas
     slotSize: Style.bar.iconSlot * (root.barShowsPercent ? 2 : 1)
     tooltipText: ""
-    iconComponent: Component {
-      Item {
-        Row {
-          anchors.centerIn: parent
-          spacing: Style.space(3)
+    // Omarchy 4.5 fits an iconComponent's whole ink box, percent included, to
+    // Style.bar.iconSize, and labelText puts the number before the glyph.
+    // Draw the mark here instead: the shell's glyph fit, then the number.
+    hasVisualContent: true
 
-          Text {
-            textFormat: Text.PlainText
-            text: Model.icon()
-            color: root.barIconColor
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.icon
-            renderType: Text.NativeRendering
-            anchors.verticalCenter: parent.verticalCenter
-          }
+    Item {
+      id: barMark
+      // BarIconButton's label group, mirrored: canvas, gap, number.
+      x: (button.width - width) / 2
+      y: (button.height - height) / 2
+      width: Style.bar.iconCanvas + (barPercent.visible ? Style.space(4) + barPercent.implicitWidth : 0)
+      height: Style.bar.iconCanvas
+      scale: button.pressScale
 
-          Text {
-            visible: root.barShowsPercent
-            textFormat: Text.PlainText
-            text: root.percentage + "%"
-            color: root.barIconColor
-            font.family: root.fontFamily
-            font.pixelSize: Style.bar.iconFont
-            renderType: Text.NativeRendering
-            anchors.verticalCenter: parent.verticalCenter
-          }
-        }
+      OpticalGlyph {
+        width: Style.bar.iconCanvas
+        height: Style.bar.iconCanvas
+        text: Model.icon()
+        fontFamily: button.fontFamily
+        fontSize: button.fontSize
+        paintedSize: Style.bar.iconSize
+        color: root.barIconColor
+        debugBounds: button.debugOpticalBounds
+      }
+
+      Text {
+        id: barPercent
+        visible: root.barShowsPercent
+        x: Style.bar.iconCanvas + Style.space(4)
+        // Center the figures, not the line box, as the shell's bar labels do.
+        y: (parent.height - height) / 2
+          + (barPercentMetrics.descent - barPercentMetrics.ascent + barPercentMetrics.tightBoundingRect("0").height) / 2
+        textFormat: Text.PlainText
+        text: root.percentage + "%"
+        color: root.barIconColor
+        font.family: button.fontFamily
+        font.pixelSize: button.fontSize
+        renderType: Text.NativeRendering
+      }
+
+      FontMetrics {
+        id: barPercentMetrics
+        font: barPercent.font
       }
     }
+
     onPressed: function(b) {
       if (!root.devicePresent) return
       if (b === Qt.RightButton) root.togglePercentage()
